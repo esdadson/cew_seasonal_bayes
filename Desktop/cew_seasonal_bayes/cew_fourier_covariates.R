@@ -142,14 +142,13 @@ dat6_brms <- dat6 %>% ungroup() %>%
   )
 
 formula_gp <- bf(
-  log_CEW ~ 
+  CEW_sum ~ 
     EVI_filled + gdd + 
     corn + cotton + soybeans + tobacco + peanuts + other + 
-    (0 + s1 + c1 + s2 + c2 + s3 + c3 | zone_fac) + 
+    (0 + s1 + c1 + s2 + c2 || location2) + 
     gp(lon_scaled, lat_scaled, cov = "exponential") + 
-    (1 | location2) + 
-    (1 | year),
-  family = gaussian()
+    (1 | year) + (1 | zone_fac),
+  family = negbinomial()
 )
 
 priors_gp <- c(
@@ -160,12 +159,13 @@ priors_gp <- c(
   prior(inv_gamma(5, 5), class = "lscale")
 )
 
-fit_gp3 <- brm(
+fit_gp2.4 <- brm(
   formula = formula_gp,
   data = dat6_brms,
   prior = priors_gp,
   chains = 2,
-  iter = 4000,
+  iter = 3000,
+  thin = 1,
   warmup = 2000,
   control = list(
     adapt_delta = 0.95
@@ -173,10 +173,96 @@ fit_gp3 <- brm(
   cores = 2,
   seed = 42,
   save_pars = save_pars(all = TRUE),
-  file = "C:/Users/edadson/Desktop/cew/brms_fit/fit_gp3"
+  file = "C:/Users/edadson/Desktop/cew/brms_fit/fit_gp2.4"
 )
 
-summary(fit_gp3)
+summary(fit_gp2.3)
+
+# fitted values
+preds = posterior_predict(fit_gp2.1, newdata = dat6_brms)
+fitted = colMeans(preds)
+fitted_lower = apply(preds, 2, quantile, 0.025)
+fitted_upper = apply(preds, 2, quantile, 0.975)
+dat6_brms$fitted = fitted
+dat6_brms$fit_lo = fitted_lower
+dat6_brms$fit_hi = fitted_upper
+
+# Model diagnostics
+# Moran's I test for spatial autocorrelation
+dat6_brms = dat6_brms %>% 
+  mutate(resids = log_CEW - fitted)
+            
+for (yr in seq(2008, 2020)) {
+  yr_dat = dat6_brms %>% 
+    group_by(location2, longitude, latitude, year) %>% 
+    summarize(year_resids = mean(resids, na.rm = T)) %>% 
+    filter(year == yr)
+  coords_yr = as.matrix(yr_dat[,c("longitude", "latitude")])
+  nb_yr = knearneigh(coords_yr, k = 4) %>% knn2nb %>% make.sym.nb()
+  W_yr = nb2listw(nb_yr, style = "W", zero.policy = T)
+  
+  mt = moran.test(yr_dat$year_resids,
+                  W_yr,
+                  zero.policy = T)
+  print(mt)
+}
+
+# Test temporal autocorrelation
+year_resid <- dat6_brms %>%
+  group_by(year) %>%
+  summarise(
+    mean_resid = mean(resids, na.rm = TRUE),
+    sd_resid   = sd(resids,   na.rm = TRUE),
+    se_resid   = sd_resid / sqrt(n()),
+    .groups    = "drop"
+  )
+
+p_year_trend <- ggplot(year_resid,
+                       aes(x = as.numeric(year),
+                           y = mean_resid)) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed",
+             color    = "grey50") +
+  geom_ribbon(aes(ymin = mean_resid - 1.96 * se_resid,
+                  ymax = mean_resid + 1.96 * se_resid),
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_smooth(method = "lm", se = FALSE,
+              color  = "tomato",
+              linetype = "dashed") +
+  labs(
+    title    = "Mean residual by year",
+    x        = "Year",
+    y        = "Mean residual"
+  ) +
+  theme_minimal()
+
+# ---- Week-of-year mean residuals ----
+woy_resid <- dat6_brms %>%
+  group_by(woy) %>%
+  summarise(
+    mean_resid = mean(resids, na.rm = TRUE),
+    se_resid   = sd(resids,   na.rm = TRUE) / sqrt(n()),
+    .groups    = "drop"
+  )
+
+p_woy_trend <- ggplot(woy_resid,
+                      aes(x = woy, y = mean_resid)) +
+  geom_hline(yintercept = 0,
+             linetype = "dashed", color = "grey50") +
+  geom_ribbon(aes(ymin = mean_resid - 1.96 * se_resid,
+                  ymax = mean_resid + 1.96 * se_resid),
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  labs(
+    title    = "Mean residual by week of year",
+    x        = "Week of year",
+    y        = "Mean residual"
+  ) +
+  theme_minimal()
+
+p_year_trend | p_woy_trend
 
 # Stan version of the code 
 stan_data = standata(dat6_brms)
