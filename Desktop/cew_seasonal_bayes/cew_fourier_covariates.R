@@ -142,13 +142,14 @@ dat6_brms <- dat6 %>% ungroup() %>%
   )
 
 formula_gp <- bf(
-  CEW_sum ~ 
+  log_CEW ~ 
     EVI_filled + gdd + 
     corn + cotton + soybeans + tobacco + peanuts + other + 
-    (0 + s1 + c1 + s2 + c2 || location2) + 
+    (0 + s1 + c1 + s2 + c2 || zone_fac) + 
     gp(lon_scaled, lat_scaled, cov = "exponential") + 
-    (1 | year) + (1 | zone_fac),
-  family = negbinomial()
+    (1 | year) + 
+    (1 | trap_type),
+  family = gaussian()
 )
 
 priors_gp <- c(
@@ -159,7 +160,7 @@ priors_gp <- c(
   prior(inv_gamma(5, 5), class = "lscale")
 )
 
-fit_gp2.4 <- brm(
+fit_gp2.1 <- brm(
   formula = formula_gp,
   data = dat6_brms,
   prior = priors_gp,
@@ -173,13 +174,16 @@ fit_gp2.4 <- brm(
   cores = 2,
   seed = 42,
   save_pars = save_pars(all = TRUE),
-  file = "C:/Users/edadson/Desktop/cew/brms_fit/fit_gp2.4"
+  file = "C:/Users/edadson/Desktop/cew/brms_fit/fit_gp2.1"
 )
 
-summary(fit_gp2.3)
+summary(fit_gp2.1)
 
 # fitted values
-preds = posterior_predict(fit_gp2.1, newdata = dat6_brms)
+preds = posterior_predict(fit_gp2.1, 
+                          newdata = dat6_brms,
+                          ndraws = 1000,
+                          allow_new_levels = TRUE)
 fitted = colMeans(preds)
 fitted_lower = apply(preds, 2, quantile, 0.025)
 fitted_upper = apply(preds, 2, quantile, 0.975)
