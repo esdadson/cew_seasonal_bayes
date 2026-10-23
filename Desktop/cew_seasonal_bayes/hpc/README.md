@@ -30,7 +30,7 @@ Approve the two-factor prompt. Idle sessions are disconnected automatically.
 1. Check your group name. The scripts assume `cmjone25`:
    ```bash
    groups
-   ls /usr/local/usrapps/cmjone25      # must exist; if not, ask your PI to request usrapps space
+   ls /share/cmjone25                  # your scratch space
    ```
 2. Initialize conda, then log out and back in:
    ```bash
@@ -58,9 +58,11 @@ Approve the two-factor prompt. Idle sessions are disconnected automatically.
 5. Create the R environment. Installs must run on a login node, because compute nodes can't download packages. This step takes 10–30 minutes:
    ```bash
    module load conda
-   conda env create --prefix /usr/local/usrapps/cmjone25/$USER/cew_env -f hpc/cew_env.yml
+   conda env create --prefix /share/cmjone25/$USER/cew_env -f hpc/cew_env.yml
    ```
    If it fails, don't patch it with `conda install`. Delete the prefix directory and create it again.
+
+   `/share` is scratch space: it is purged automatically and not backed up, so the environment can disappear. Don't touch files to keep it alive, because the AUP prohibits dodging the purge. If a job fails with a `conda activate` error, re-run this command; `hpc/cew_env.yml` rebuilds the same environment.
 
 ## 3. Choose where outputs go [Hazel]
 

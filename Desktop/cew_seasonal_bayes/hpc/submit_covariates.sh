@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."                     # project dir (where the R scripts l
 # Raster/USA/landcover/
 export CEW_DATA=${CEW_DATA:-/rs1/researchers/c/cmjone25/Data}
 export CEW_OUT=${CEW_OUT:-$PWD/covariates}
-export CONDA_ENV=${CONDA_ENV:-/usr/local/usrapps/cmjone25/$USER/cew_env}
+export CONDA_ENV=${CONDA_ENV:-/share/cmjone25/$USER/cew_env}
 PARTITION=${PARTITION:-compute}
 
 # --- Resources: replace with the values printed by the dry run / seff ----------
