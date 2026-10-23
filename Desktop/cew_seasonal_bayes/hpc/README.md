@@ -44,19 +44,19 @@ If the repo is private, use a GitHub personal access token as the password.
    ls /usr/local/usrapps/cmjone25       # must exist; if not, ask your PI to request usrapps space
    ```
 
-2. **See what Hazel provides.** These commands only list modules; they run no code.
+2. **Modules are set in `hpc/r_env.sh`.** You shouldn't need to edit it.
+   - `module load R` (R 4.4.0, Hazel's documented default) is always loaded.
+   - `gdal`, `proj` and `geos` are loaded if they exist. `terra` needs them to compile and run.
+   - The installer and every job print which modules were loaded. If GDAL is missing, they also print `no gdal-config on PATH`.
+
+   If that warning appears, check what's available:
    ```bash
-   module avail R
    module avail gdal ; module avail proj ; module avail geos
    ```
+   - **Versioned names** (e.g. `gdal/3.8.4`): put those in `R_OPTIONAL_MODULES` in `hpc/r_env.sh`.
+   - **Nothing:** GDAL on Hazel comes through the `gis` software group. Email HPC support to request access, or use the conda fallback in the appendix.
 
-3. **Edit `R_MODULES` in `hpc/r_env.sh`** (`nano hpc/r_env.sh`):
-   - If `module avail R` lists several versions, pin one. For example: `R_MODULES="R/4.4.2"`.
-   - If GDAL, PROJ or GEOS modules exist, add them so `terra` can compile and run. For example: `R_MODULES="R/4.4.2 gdal proj geos"`, using the exact names `module avail` printed.
-
-   Both the installer and every job read this file, so the same modules are loaded everywhere.
-
-4. **Install the packages.** This runs on the login node, which Hazel's docs require: compute nodes have no internet. It only installs packages and runs no analysis.
+3. **Install the packages.** This runs on the login node, which Hazel's docs require: compute nodes have no internet. It only installs packages and runs no analysis.
    ```bash
    ./hpc/install_r_packages.sh
    ```
@@ -64,9 +64,7 @@ If the repo is private, use a GitHub personal access token as the password.
    - Compiling `terra` can take 20–40 minutes.
    - It finishes with `All packages available` or names the packages that failed.
 
-   **If `terra` fails to compile** (errors mentioning `gdal-config`, `proj` or `geos`), the GDAL, PROJ or GEOS modules are missing or don't match:
-   - Fix `R_MODULES` and re-run.
-   - If Hazel has no GDAL modules, use the conda fallback in the appendix.
+   **If `terra` fails to compile** (errors mentioning `gdal-config`, `proj` or `geos`), see step 3.2.
 
 ## 4. Choose where outputs go (optional) [Hazel]
 
@@ -103,8 +101,8 @@ What the log shows:
 - **`seff`:** *Memory Utilized* and *Wall-clock time*. Trust these if they differ from the suggestions.
 
 If the job fails:
-- **`there is no package called ...`:** re-run step 3.4.
-- **`libgdal... cannot open shared object`:** add the GDAL, PROJ and GEOS modules to `R_MODULES`.
+- **`there is no package called ...`:** re-run step 3.3.
+- **`libgdal... cannot open shared object`:** the job didn't load the GDAL module the packages were built with. See step 3.2.
 
 ## 6. Set resources [Hazel]
 
@@ -180,7 +178,7 @@ If `sbatch` rejects `--partition=compute`, change it in `hpc/dryrun.sbatch` and 
 
 ## Appendix: conda fallback
 
-Use this only if `terra` can't be built against Hazel's modules. Do these steps instead of step 3.4. All commands run on the login node.
+Use this only if `terra` can't be built against Hazel's modules. Do these steps instead of step 3.3. All commands run on the login node.
 
 ```bash
 module load conda && conda init bash        # then log out and back in

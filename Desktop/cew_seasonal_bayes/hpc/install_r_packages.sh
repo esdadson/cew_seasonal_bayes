@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 source hpc/r_env.sh
 [ "$R_SETUP" = conda ] && { echo "R_SETUP=conda: build the environment from hpc/cew_env.yml instead"; exit 1; }
 mkdir -p "$R_LIBS_USER"
-echo "R: $(command -v Rscript)   library: $R_LIBS_USER   modules: $R_MODULES"
+echo "R: $(command -v Rscript)   library: $R_LIBS_USER"
 Rscript -e '
 pk   <- c("terra", "landscapemetrics", "dplyr", "tidyr", "geosphere")
 have <- vapply(pk, requireNamespace, logical(1), quietly = TRUE)
