@@ -12,6 +12,8 @@
 #   Rscript cew_covariates_hpc.R daymet <year> <var>   # var = tmax | tmin | prcp
 #   Rscript cew_covariates_hpc.R cdl <year>            # landscape metrics, all sites
 #   Rscript cew_covariates_hpc.R dryrun [n_cdl_sites]  # check inputs, time one unit of each
+#   Rscript cew_covariates_hpc.R local [year ...]      # workstation: everything (or some
+#                                                      # years) in one session, resumable
 #
 # Environment:
 #   CEW_DATA  data root containing Original/ and Raster/
@@ -144,11 +146,41 @@ if (Sys.info()[["sysname"]] == "Linux" && !nzchar(Sys.getenv("SLURM_JOB_ID")))
 args <- commandArgs(trailingOnly = TRUE)
 mode <- if (length(args)) args[1] else "dryrun"
 
-if (mode == "sites") {
+write_sites <- function() {
   counts_raw <- read.csv(counts_path) %>% filter(longitude >= -105)
   sites <- make_site_table(counts_raw)
   write.csv(sites, file.path(out_dir, "cew_sites.csv"), row.names = FALSE)
   message(nrow(sites), " sites written")
+  sites
+}
+
+if (mode == "sites") {
+  write_sites()
+
+} else if (mode == "local") {
+  # Same outputs as the HPC jobs, made one after another on this machine.
+  # Finished files are skipped, so an interrupted run resumes where it stopped.
+  sel   <- if (length(args) > 1) as.integer(args[-1]) else c(daymet_yrs, yrs)
+  sites <- write_sites()
+  cores <- max(1, parallel::detectCores() - 2)
+  t_all <- Sys.time()
+  for (yr in intersect(daymet_yrs, sel)) for (var in daymet_vars) {
+    f <- file.path(out_dir, sprintf("daymet_%s_%d.rds", var, yr))
+    if (file.exists(f)) next
+    t0 <- Sys.time()
+    saveRDS(extract_daymet(sites, yr, var), f)
+    message(sprintf("daymet %s %d: %.1f min", var, yr, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  }
+  for (yr in intersect(yrs, sel)) {
+    f <- file.path(out_dir, sprintf("cdl_%d.rds", yr))
+    if (file.exists(f)) next
+    t0 <- Sys.time()
+    out <- run_cdl(sites, yr, cores)
+    saveRDS(out, f)
+    message(sprintf("cdl %d: %d sites on %d cores, %.1f min", yr, nrow(out), cores,
+                    as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  }
+  message(sprintf("Done in %.1f min. Outputs in %s", as.numeric(difftime(Sys.time(), t_all, units = "mins")), out_dir))
 
 } else if (mode == "daymet") {
   yr <- as.integer(args[2]); var <- args[3]
