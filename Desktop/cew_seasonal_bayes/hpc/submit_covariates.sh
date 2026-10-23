@@ -2,7 +2,7 @@
 # Submit the covariate extraction (cew_covariates_hpc.R) to Slurm on Hazel.
 # This script only calls sbatch, so it is fine on a login node; all R code
 # runs on compute nodes through hpc/covariates.sbatch.
-#   ./hpc/submit_covariates.sh dry    # one job: checks inputs, times one Daymet unit + 20 CDL sites
+# Dry run first (its own job script):  sbatch hpc/dryrun.sbatch
 #   ./hpc/submit_covariates.sh run    # sites -> Daymet arrays (3 x 14 jobs) + CDL array (13 jobs)
 #   ./hpc/submit_covariates.sh daymet|cdl   # re-submit one array (e.g. after failures)
 # Watch: squeue -u $USER     Usage after a job: seff <jobid>
@@ -41,13 +41,7 @@ submit_cdl() {
 }
 
 case "${1:-}" in
-  dry)
-    # Generous limits so the measurement itself can't be cut short
-    jid=$(sb --job-name=cew_dryrun --time=04:00:00 --mem=32G --output="logs/dryrun.%j.out" \
-             hpc/covariates.sbatch dryrun 20)
-    echo "Submitted dry run $jid. When it finishes:"
-    echo "  tail -30 logs/dryrun.$jid.out   # suggested settings"
-    echo "  seff $jid                       # measured time and peak memory" ;;
+  dry) echo "Submit the dry run directly: sbatch hpc/dryrun.sbatch"; exit 1 ;;
   run)
     jid=$(sb --job-name=cew_sites --time=00:15:00 --mem=4G --output="logs/sites.%j.out" \
              hpc/covariates.sbatch sites)
@@ -56,5 +50,5 @@ case "${1:-}" in
     submit_cdl    "--dependency=afterok:$jid" ;;
   daymet) submit_daymet ;;
   cdl)    submit_cdl ;;
-  *) echo "usage: $0 dry|run|daymet|cdl"; exit 1 ;;
+  *) echo "usage: $0 run|daymet|cdl   (dry run: sbatch hpc/dryrun.sbatch)"; exit 1 ;;
 esac

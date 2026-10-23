@@ -4,6 +4,10 @@
 # split into one unit of work per call so it runs as a Slurm job array.
 # On Hazel, never run this on a login node: submit it with hpc/submit_covariates.sh.
 #
+# Always run inside a Slurm job (the script refuses otherwise on Linux):
+#   sbatch hpc/dryrun.sbatch                            # dry run
+#   ./hpc/submit_covariates.sh run                      # everything else
+# Modes, as called by hpc/covariates.sbatch and hpc/dryrun.sbatch:
 #   Rscript cew_covariates_hpc.R sites                 # site table (run first)
 #   Rscript cew_covariates_hpc.R daymet <year> <var>   # var = tmax | tmin | prcp
 #   Rscript cew_covariates_hpc.R cdl <year>            # landscape metrics, all sites
@@ -132,6 +136,11 @@ peak_mem_gb <- function() {          # Linux only: peak resident memory of this 
 }
 
 # =============================================================================
+# Hazel AUP: no code on login nodes. On Linux, refuse to run outside a Slurm job.
+if (Sys.info()[["sysname"]] == "Linux" && !nzchar(Sys.getenv("SLURM_JOB_ID")))
+  stop("Not inside a Slurm job. Submit with `sbatch hpc/dryrun.sbatch` or ",
+       "`./hpc/submit_covariates.sh run` - never run R on a login node.")
+
 args <- commandArgs(trailingOnly = TRUE)
 mode <- if (length(args)) args[1] else "dryrun"
 
