@@ -11,7 +11,7 @@ library(tidybayes)
 
 options(brms.backend = "cmdstanr")
 
-dat <- read.csv("Z:/Data/Original/pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")
+dat <- read.csv("/Volumes/cmjone25/Data/Original/pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")
 dat = dat %>% group_by(longitude, latitude) %>% mutate(location2 = cur_group_id())
 dat$location3 = paste(dat$location, dat$location2, sep = "_")
 
@@ -174,7 +174,7 @@ fit_gp2.1 <- brm(
   cores = 2,
   seed = 42,
   save_pars = save_pars(all = TRUE),
-  file = "C:/Users/edadson/Desktop/cew/brms_fit/fit_gp2.1"
+  file = "/Users/evandadson/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/brms_fits/fit_gp2.1"
 )
 
 summary(fit_gp2.1)

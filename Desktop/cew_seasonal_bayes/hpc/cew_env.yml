@@ -1,0 +1,15 @@
+# Conda environment for cew_covariates_hpc.R on Hazel (sf/terra need GDAL,
+# which conda-forge supplies; compiling them from source on the cluster is painful).
+#   module load conda
+#   conda env create -f hpc/cew_env.yml -p /usr/local/usrapps/cmjone25/$USER/cew_env
+name: cew_env
+channels:
+  - conda-forge
+dependencies:
+  - r-base=4.4
+  - r-dplyr
+  - r-tidyr
+  - r-sf
+  - r-terra
+  - r-landscapemetrics
+  - r-geosphere
