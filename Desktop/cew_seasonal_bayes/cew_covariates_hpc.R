@@ -28,7 +28,7 @@
 # =============================================================================
 
 suppressPackageStartupMessages({
-  library(dplyr); library(tidyr); library(sf); library(terra); library(landscapemetrics)
+  library(dplyr); library(tidyr); library(terra); library(landscapemetrics)
 })
 source("cew_source_sink_functions.R")
 

@@ -13,10 +13,8 @@
 # ends: tail -30 logs/dryrun.<jobid>.out (suggested settings) and seff <jobid>.
 export CEW_DATA=${CEW_DATA:-/rs1/researchers/c/cmjone25/Data}
 export CEW_OUT=${CEW_OUT:-$SLURM_SUBMIT_DIR/covariates}
-export CONDA_ENV=${CONDA_ENV:-/share/cmjone25/$USER/cew_env}
 
-source ~/.bashrc                      # required before conda activate (Hazel docs)
-conda activate "$CONDA_ENV"
 cd "$SLURM_SUBMIT_DIR"
+source hpc/r_env.sh                   # Hazel R module (default) or conda
 echo "$(date '+%F %T') $(hostname): dry run"
 Rscript cew_covariates_hpc.R dryrun 20

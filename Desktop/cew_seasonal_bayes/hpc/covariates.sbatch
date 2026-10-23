@@ -5,9 +5,8 @@
 # which sets the resources. Usage: sbatch [options] hpc/covariates.sbatch <mode> [args]
 # In array jobs the argument YEAR becomes YEAR0 + SLURM_ARRAY_TASK_ID
 # (array indices stay small; Slurm caps them, so years can't be used directly).
-source ~/.bashrc                      # required before conda activate (Hazel docs)
-conda activate "$CONDA_ENV"
 cd "$SLURM_SUBMIT_DIR"
+source hpc/r_env.sh                   # Hazel R module (default) or conda
 
 args=("$@")
 if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then

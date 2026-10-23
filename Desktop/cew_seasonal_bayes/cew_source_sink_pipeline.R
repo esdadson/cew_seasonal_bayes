@@ -23,7 +23,6 @@
 # =============================================================================
 
 library(dplyr); library(tidyr); library(lubridate); library(zoo)
-library(sf)
 library(brms); library(posterior); library(ggplot2)
 options(brms.backend = "cmdstanr")
 source("cew_source_sink_functions.R")

@@ -35,8 +35,8 @@ make_site_table <- function(counts_raw) {
     mutate(location2 = row_number())
   # Projected coordinates (km) for the GP - degrees of longitude shrink with
   # latitude, so scaled lon/lat is not isotropic
-  xy <- sf::st_coordinates(sf::st_transform(
-    sf::st_as_sf(sites, coords = c("longitude", "latitude"), crs = 4326, remove = FALSE), 5070)) / 1000
+  xy <- terra::crds(terra::project(
+    terra::vect(as.data.frame(sites), geom = c("longitude", "latitude"), crs = "EPSG:4326"), "EPSG:5070")) / 1000
   sites$x_km <- xy[, 1]; sites$y_km <- xy[, 2]
   sites
 }

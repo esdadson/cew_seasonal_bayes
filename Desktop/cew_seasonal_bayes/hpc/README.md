@@ -2,11 +2,13 @@
 
 This extracts Daymet weather and CDL landscape metrics for every trap site (sections 2–3 of `cew_source_sink_pipeline.R`) as Slurm jobs on Hazel. The output files are then read by the pipeline.
 
-> **Rule:** never run R or Python on a login node. Every step below that runs code is submitted with `sbatch`. Login nodes are only for editing, `git`, conda installs, and `sbatch`/`squeue`/`seff`.
+> **Rule:** never run analysis code on a login node. Login nodes are for editing, `git`, `module`, installing packages, and `sbatch`/`squeue`/`seff`. Every step that runs the analysis is submitted with `sbatch`. As a safeguard, `cew_covariates_hpc.R` refuses to start on Hazel unless it is inside a Slurm job.
 
 Where each step runs:
 - **[Mac]**: your laptop.
 - **[Hazel]**: a login node, via `ssh`.
+
+R comes from Hazel's R module, with packages in a personal library, so no conda environment is needed. Conda remains a fallback (appendix).
 
 ## 0. Push the code [Mac]
 
@@ -25,97 +27,96 @@ ssh <unityID>@login.hpc.ncsu.edu
 
 Approve the two-factor prompt. Idle sessions are disconnected automatically.
 
-## 2. One-time setup [Hazel]
+## 2. Get the code [Hazel]
 
-1. Check your group name. The scripts assume `cmjone25`:
-   ```bash
-   groups
-   ls /share/cmjone25                  # your scratch space
-   ```
-2. Initialize conda, then log out and back in:
-   ```bash
-   module load conda
-   conda init bash                     # ignore the warnings
-   exit
-   ```
-3. Point the conda package cache at scratch, so it doesn't fill your home quota:
-   ```bash
-   mkdir -p /share/cmjone25/$USER/conda/pkgs
-   cat > ~/.condarc <<'EOF'
-   pkgs_dirs:
-     - /share/cmjone25/$USER/conda/pkgs
-   channels:
-     - conda-forge
-   EOF
-   sed -i "s/\$USER/$USER/" ~/.condarc
-   ```
-4. Get the code:
-   ```bash
-   git clone https://github.com/esdadson/cew_seasonal_bayes.git
-   cd cew_seasonal_bayes/Desktop/cew_seasonal_bayes
-   ```
-   If the repo is private, use a GitHub personal access token as the password, or add an SSH key from Hazel to GitHub.
-5. Create the R environment. Installs must run on a login node, because compute nodes can't download packages. This step takes 10–30 minutes:
-   ```bash
-   module load conda
-   conda env create --prefix /share/cmjone25/$USER/cew_env -f hpc/cew_env.yml
-   ```
-   If it fails, don't patch it with `conda install`. Delete the prefix directory and create it again.
+```bash
+git clone https://github.com/esdadson/cew_seasonal_bayes.git
+cd cew_seasonal_bayes/Desktop/cew_seasonal_bayes
+```
 
-   `/share` is scratch space: it is purged automatically and not backed up, so the environment can disappear. Don't touch files to keep it alive, because the AUP prohibits dodging the purge. If a job fails with a `conda activate` error, re-run this command; `hpc/cew_env.yml` rebuilds the same environment.
+If the repo is private, use a GitHub personal access token as the password.
 
-## 3. Choose where outputs go [Hazel]
+## 3. Set up R (one time) [Hazel]
 
-By default the outputs go to `covariates/` inside the repo. Alternatively, write them to research storage so your Mac can read them through the `/Volumes/cmjone25` mount, with no copying:
+1. **Check your group and package-library space.** Hazel's docs put R packages in `/usr/local/usrapps/<group>/<user>/libs/R`.
+   ```bash
+   groups                               # should include cmjone25
+   ls /usr/local/usrapps/cmjone25       # must exist; if not, ask your PI to request usrapps space
+   ```
+
+2. **See what Hazel provides.** These commands only list modules; they run no code.
+   ```bash
+   module avail R
+   module avail gdal ; module avail proj ; module avail geos
+   ```
+
+3. **Edit `R_MODULES` in `hpc/r_env.sh`** (`nano hpc/r_env.sh`):
+   - If `module avail R` lists several versions, pin one. For example: `R_MODULES="R/4.4.2"`.
+   - If GDAL, PROJ or GEOS modules exist, add them so `terra` can compile and run. For example: `R_MODULES="R/4.4.2 gdal proj geos"`, using the exact names `module avail` printed.
+
+   Both the installer and every job read this file, so the same modules are loaded everywhere.
+
+4. **Install the packages.** This runs on the login node, which Hazel's docs require: compute nodes have no internet. It only installs packages and runs no analysis.
+   ```bash
+   ./hpc/install_r_packages.sh
+   ```
+   - It installs only what is missing from `terra`, `landscapemetrics`, `dplyr`, `tidyr` and `geosphere`.
+   - Compiling `terra` can take 20–40 minutes.
+   - It finishes with `All packages available` or names the packages that failed.
+
+   **If `terra` fails to compile** (errors mentioning `gdal-config`, `proj` or `geos`), the GDAL, PROJ or GEOS modules are missing or don't match:
+   - Fix `R_MODULES` and re-run.
+   - If Hazel has no GDAL modules, use the conda fallback in the appendix.
+
+## 4. Choose where outputs go (optional) [Hazel]
+
+To save results to research storage, where your Mac can read them directly:
 
 ```bash
 export CEW_OUT=/rs1/researchers/c/cmjone25/Data/Original/pest-occurrence/corn_earworm/covariates
 ```
 
-`export` only lasts for the current login. Set it again before every `submit_covariates.sh` call, or add it to `~/.bashrc`.
+Otherwise they go to `covariates/` in the repo.
 
-Don't use `/share` for outputs you need to keep, because scratch is purged automatically.
+`export` only lasts for the current login, so set it again before each `sbatch` or `submit_covariates.sh`. Don't use `/share` for outputs: it is purged.
 
-## 4. Dry run [compute node, submitted from Hazel]
+## 5. Dry run [submitted from Hazel, runs on a compute node]
 
-The dry run runs as a Slurm job on a compute node. The only thing you type on the login node is `sbatch`. Run it from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`:
+Run from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`:
 
 ```bash
-sbatch hpc/dryrun.sbatch            # prints "Submitted batch job <jobid>"
-squeue -u $USER                     # PD = waiting, R = running; empty = done
+sbatch hpc/dryrun.sbatch            # "Submitted batch job <jobid>"
+squeue -u $USER                     # PD = waiting, R = running; gone = finished
 ```
 
-As a safeguard, `cew_covariates_hpc.R` refuses to start on Hazel unless it is inside a Slurm job. If it is ever launched on a login node by mistake, it exits immediately without doing any work.
-
-If you set `CEW_OUT` in step 3, `sbatch` passes it to the job.
-
-When the job is done:
+When it is finished:
 
 ```bash
 tail -30 logs/dryrun.<jobid>.out
 seff <jobid>
 ```
 
-The log shows the following:
-- **`N/56 input files found`**: if any files are missing, the job stops and lists them. Fix the paths, then submit the dry run again.
-- **Site count:** the number of sites and how many returned CDL metrics. Sites outside the US return none; that is expected.
+What the log shows:
+- **`N/56 input files found`:** if any files are missing, the job stops and lists them. Fix the paths, then resubmit.
+- **Sites returned:** sites outside the US get no CDL metrics. That is expected.
 - **Suggested settings:** the `DAYMET_*` and `CDL_*` values to use.
+- **`seff`:** *Memory Utilized* and *Wall-clock time*. Trust these if they differ from the suggestions.
 
-`seff` shows the job's **Memory Utilized** and **Job Wall-clock time**. Memory measured inside R can miss some usage, so trust `seff` if the two differ.
+If the job fails:
+- **`there is no package called ...`:** re-run step 3.4.
+- **`libgdal... cannot open shared object`:** add the GDAL, PROJ and GEOS modules to `R_MODULES`.
 
-If the job fails, read the error at the bottom of the log. The most likely problems are a wrong `CONDA_ENV` path or a missing R package in the environment.
-
-## 5. Set resources [Hazel]
+## 6. Set resources [Hazel]
 
 ```bash
 nano hpc/submit_covariates.sh
 ```
 
-Copy the suggested values into the `Resources` block (`DAYMET_TIME`, `DAYMET_MEM`, `CDL_CPUS`, `CDL_TIME`, `CDL_MEM`).
+Paste the suggested values into the `Resources` block.
 
-For `CDL_MEM`, use about 1.5 × the dry run's **Memory Utilized** × `CDL_CPUS`, because each core runs its own R process.
+For `CDL_MEM`, use about 1.5 × *Memory Utilized* × `CDL_CPUS`, because each core runs its own R process.
 
-## 6. Full run [Hazel]
+## 7. Full run [Hazel]
 
 ```bash
 ./hpc/submit_covariates.sh run
@@ -124,22 +125,18 @@ squeue -u $USER
 
 This submits the following:
 - **Site table:** 1 job.
-- **Daymet:** 3 arrays of 14 jobs, one per variable (`tmax`, `tmin`, `prcp`) per year from 2007 to 2020.
-- **CDL:** 1 array of 13 jobs, one per year from 2008 to 2020.
+- **Daymet:** 42 jobs, one per variable (`tmax`, `tmin`, `prcp`) per year from 2007 to 2020.
+- **CDL:** 13 jobs, one per year from 2008 to 2020.
 
-The arrays wait until the site table has finished successfully.
+The Daymet and CDL jobs start only after the site table finishes successfully. You can log out while they run.
 
-You can log out while the jobs run. Log in again later to check on them.
-
-## 7. Check the results [Hazel]
+## 8. Check the results [Hazel]
 
 ```bash
-ls $CEW_OUT/daymet_*.rds | wc -l    # expect 42
-ls $CEW_OUT/cdl_*.rds    | wc -l    # expect 13
+ls covariates/daymet_*.rds | wc -l    # expect 42  (or $CEW_OUT/... if you set it)
+ls covariates/cdl_*.rds    | wc -l    # expect 13
 sacct -u $USER -S today --format=JobName%12,JobID%16,State,Elapsed,MaxRSS | grep -v COMPLETED
 ```
-
-If no `export` is active, `CEW_OUT` is empty here, so use `ls covariates/...` instead.
 
 Any line from `sacct` is a job that didn't complete. Read its log:
 - Daymet: `logs/dm_<var>.<arrayid>_<index>.out`
@@ -147,22 +144,28 @@ Any line from `sacct` is a job that didn't complete. Read its log:
 
 The index counts years from 0, starting at 2007 for Daymet and 2008 for CDL.
 
-To resubmit failures:
-- **One array:** `./hpc/submit_covariates.sh daymet` or `./hpc/submit_covariates.sh cdl`. This re-runs the whole array.
-- **Out of time or memory** (`TIMEOUT` or `OUT_OF_MEMORY`): raise that value in step 5 first.
+To fix and resubmit:
+- **Out of time or memory** (`TIMEOUT` or `OUT_OF_MEMORY`): raise that value in step 6.
+- **Resubmit:** `./hpc/submit_covariates.sh daymet` or `./hpc/submit_covariates.sh cdl`. This re-runs the whole array.
 
-## 8. Run the pipeline [Mac]
+## 9. Run the pipeline [Mac]
 
-If you skipped step 3, copy the outputs back:
+If you skipped step 4, copy the outputs back:
 
 ```bash
 rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/covariates/ \
   ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/covariates/
 ```
 
-Then run `cew_source_sink_pipeline.R` from the project. If the outputs are in research storage, first run `Sys.setenv(CEW_OUT = "/Volumes/cmjone25/Data/Original/pest-occurrence/corn_earworm/covariates")` in R.
+If you used research storage, first run this in R:
 
-The pipeline stops if its site table doesn't match the one the HPC jobs used. If that happens, re-run step 6.
+```r
+Sys.setenv(CEW_OUT = "/Volumes/cmjone25/Data/Original/pest-occurrence/corn_earworm/covariates")
+```
+
+Then run `cew_source_sink_pipeline.R`.
+
+The pipeline stops if its site table doesn't match the one the HPC jobs used. If that happens, re-run step 7.
 
 ## Quick reference
 
@@ -170,7 +173,24 @@ The pipeline stops if its site table doesn't match the one the HPC jobs used. If
 | --- | --- |
 | My jobs | `squeue -u $USER` |
 | Cancel one / all | `scancel <jobid>` / `scancel -u $USER` |
-| Usage of a finished job | `seff <jobid>` |
-| Today's job history | `sacct -u $USER -S today` |
+| Finished job's usage | `seff <jobid>` |
+| Today's history | `sacct -u $USER -S today` |
 
-Policies: [Hazel AUP](https://hpc.ncsu.edu/About/AUP.php), [LSF→Slurm guide](https://hpc.ncsu.edu/RunningJobs/Migration.php). Help: help@ncsu.edu
+If `sbatch` rejects `--partition=compute`, change it in `hpc/dryrun.sbatch` and in `PARTITION` in `hpc/submit_covariates.sh`.
+
+## Appendix: conda fallback
+
+Use this only if `terra` can't be built against Hazel's modules. Do these steps instead of step 3.4. All commands run on the login node.
+
+```bash
+module load conda && conda init bash        # then log out and back in
+mkdir -p /share/cmjone25/$USER/conda/pkgs
+printf "pkgs_dirs:\n  - /share/cmjone25/$USER/conda/pkgs\nchannels:\n  - conda-forge\n" > ~/.condarc
+conda env create --prefix /share/cmjone25/$USER/cew_env -f hpc/cew_env.yml
+```
+
+Then set `R_SETUP=${R_SETUP:-conda}` in `hpc/r_env.sh`.
+
+`/share` is purged, so if a job fails at `conda activate`, re-run the `conda env create` line.
+
+Policies: [Hazel AUP](https://hpc.ncsu.edu/About/AUP.php), [R on Hazel](https://hpc.ncsu.edu/Software/Apps.php?app=R), [LSF→Slurm guide](https://hpc.ncsu.edu/RunningJobs/Migration.php). Help: help@ncsu.edu
