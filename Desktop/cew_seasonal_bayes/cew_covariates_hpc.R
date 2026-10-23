@@ -8,9 +8,9 @@
 #   sbatch hpc/dryrun.sbatch                            # dry run
 #   ./hpc/submit_covariates.sh run                      # everything else
 # Modes, as called by hpc/covariates.sbatch and hpc/dryrun.sbatch:
-#   Rscript cew_covariates_hpc.R sites                 # site table (run first)
+#   Rscript cew_covariates_hpc.R sites                 # site + site-year tables (run first)
 #   Rscript cew_covariates_hpc.R daymet <year> <var>   # var = tmax | tmin | prcp
-#   Rscript cew_covariates_hpc.R cdl <year>            # landscape metrics, all sites
+#   Rscript cew_covariates_hpc.R cdl <year>            # landscape metrics, that year's sites
 #   Rscript cew_covariates_hpc.R dryrun [n_cdl_sites]  # check inputs, time one unit of each
 #   Rscript cew_covariates_hpc.R local [year ...]      # workstation: everything (or some
 #                                                      # years) in one session, resumable
@@ -19,6 +19,11 @@
 #   CEW_DATA  data root containing Original/ and Raster/
 #             (default: /rs1/researchers/c/cmjone25/Data on Hazel, see default_data_root())
 #   CEW_OUT   output directory                             (default covariates)
+#   CEW_SITES which sites each year's extraction covers       (default active)
+#             active: CDL year Y -> sites trapped in Y; Daymet file Y -> sites
+#                     trapped in Y-1, Y or Y+1 (the file holds the December
+#                     before season Y+1 and ISO weeks that cross New Year)
+#             all:    every site in every year
 #   SLURM_CPUS_PER_TASK  cores for the CDL step (set by sbatch --cpus-per-task)
 #
 # Why it is faster than cew_landscapemetrics.R:
@@ -37,6 +42,7 @@ source("cew_source_sink_functions.R")
 data_root <- default_data_root()
 out_dir   <- Sys.getenv("CEW_OUT", "covariates")
 n_cores   <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1"))
+site_mode <- match.arg(Sys.getenv("CEW_SITES", "active"), c("active", "all"))
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 counts_path <- file.path(data_root, "Original/pest-occurrence/corn_earworm/doi_10_5061_dryad_m0cfxpp5x__v20221206/Lawton_etal_data.csv")
@@ -70,16 +76,43 @@ rcl_complete <- rbind(rcl, cbind(setdiff(1:255, rcl[, 1]), 63L))   # everything 
 class_names  <- c(`1` = "Corn", `2` = "Cotton", `5` = "Soybeans", `10` = "Peanuts",
                   `11` = "Tobacco", `44` = "Other_Crops", `63` = "Non_Crop")
 
-read_sites <- function() {
-  f <- file.path(out_dir, "cew_sites.csv")
+read_out_csv <- function(name) {
+  f <- file.path(out_dir, name)
   if (!file.exists(f)) stop("Run `Rscript cew_covariates_hpc.R sites` first (", f, " missing)")
   read.csv(f)
 }
+read_sites      <- function() read_out_csv("cew_sites.csv")
+read_site_years <- function() read_out_csv("cew_site_years.csv")
 
 # -----------------------------------------------------------------------------
-# Daymet: one variable, one year, all sites -> long data frame
+# Which sites were trapped in which (ISO) year: >= 1 non-missing count, the
+# same year definition as the pipeline. location2 comes from the ONE site table,
+# so ids are stable across years even though the set of sites changes.
+# -----------------------------------------------------------------------------
+make_site_years <- function(counts_raw, sites) {
+  counts_raw %>%
+    mutate(date = as.Date(substr(date, 1, 10)),
+           year = as.integer(format(date, "%G")),
+           CEW  = suppressWarnings(as.numeric(CEW_sum))) %>%
+    filter(!is.na(CEW), year %in% yrs) %>%
+    inner_join(sites %>% select(longitude, latitude, location2), by = c("longitude", "latitude")) %>%
+    distinct(location2, year) %>%
+    arrange(year, location2)
+}
+
+# Sites to extract for one CDL year or one Daymet calendar-year file
+sites_for <- function(sites, site_years, yr, product = c("cdl", "daymet")) {
+  if (site_mode == "all") return(sites)
+  span <- if (match.arg(product) == "daymet") (yr - 1):(yr + 1) else yr
+  sites[sites$location2 %in% site_years$location2[site_years$year %in% span], ]
+}
+
+# -----------------------------------------------------------------------------
+# Daymet: one variable, one year, the given sites -> long data frame
 # -----------------------------------------------------------------------------
 extract_daymet <- function(sites, yr, var) {
+  if (!nrow(sites)) return(setNames(data.frame(integer(), as.Date(character()), numeric()),
+                                    c("location2", "date", var)))
   r <- rast(daymet_path(var, yr))
   pts <- project(vect(sites, geom = c("longitude", "latitude"), crs = "EPSG:4326"), crs(r))
   v <- as.matrix(terra::extract(r, pts, ID = FALSE))     # sites x days
@@ -118,11 +151,14 @@ cdl_sites <- function(sites_xy, yr) {
 }
 
 run_cdl <- function(sites, yr, cores = n_cores) {
+  empty <- tibble(location2 = integer(), year = integer())
+  if (!nrow(sites)) return(empty)
   r0 <- rast(cdl_path(yr))
   xy <- crds(project(vect(sites, geom = c("longitude", "latitude"), crs = "EPSG:4326"), crs(r0)))
   sites_xy <- data.frame(location2 = sites$location2, x = xy[, 1], y = xy[, 2])
   chunks <- split(sites_xy, (seq_len(nrow(sites_xy)) - 1) %% cores)   # interleaved: spreads slow regions
   long <- bind_rows(parallel::mclapply(chunks, cdl_sites, yr = yr, mc.cores = cores))
+  if (!nrow(long)) return(empty)                      # e.g. every site outside the CDL
   long %>%
     mutate(class = class_names[as.character(class)]) %>%
     filter(!is.na(class)) %>%
@@ -148,10 +184,13 @@ mode <- if (length(args)) args[1] else "dryrun"
 
 write_sites <- function() {
   counts_raw <- read.csv(counts_path) %>% filter(longitude >= -105)
-  sites <- make_site_table(counts_raw)
+  sites      <- make_site_table(counts_raw)
+  site_years <- make_site_years(counts_raw, sites)
   write.csv(sites, file.path(out_dir, "cew_sites.csv"), row.names = FALSE)
-  message(nrow(sites), " sites written")
-  sites
+  write.csv(site_years, file.path(out_dir, "cew_site_years.csv"), row.names = FALSE)
+  message(nrow(sites), " sites; sites trapped per year (CEW_SITES=", site_mode, "):")
+  print(table(site_years$year))
+  list(sites = sites, site_years = site_years)
 }
 
 if (mode == "sites") {
@@ -161,24 +200,27 @@ if (mode == "sites") {
   # Same outputs as the HPC jobs, made one after another on this machine.
   # Finished files are skipped, so an interrupted run resumes where it stopped.
   sel   <- if (length(args) > 1) as.integer(args[-1]) else c(daymet_yrs, yrs)
-  sites <- write_sites()
+  st    <- write_sites()
   cores <- max(1, parallel::detectCores() - 2)
   t_all <- Sys.time()
   for (yr in intersect(daymet_yrs, sel)) for (var in daymet_vars) {
     f <- file.path(out_dir, sprintf("daymet_%s_%d.rds", var, yr))
     if (file.exists(f)) next
     t0 <- Sys.time()
-    saveRDS(extract_daymet(sites, yr, var), f)
-    message(sprintf("daymet %s %d: %.1f min", var, yr, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+    s_yr <- sites_for(st$sites, st$site_years, yr, "daymet")
+    saveRDS(extract_daymet(s_yr, yr, var), f)
+    message(sprintf("daymet %s %d: %d sites, %.1f min", var, yr, nrow(s_yr),
+                    as.numeric(difftime(Sys.time(), t0, units = "mins"))))
   }
   for (yr in intersect(yrs, sel)) {
     f <- file.path(out_dir, sprintf("cdl_%d.rds", yr))
     if (file.exists(f)) next
     t0 <- Sys.time()
-    out <- run_cdl(sites, yr, cores)
+    s_yr <- sites_for(st$sites, st$site_years, yr, "cdl")
+    out  <- run_cdl(s_yr, yr, cores)
     saveRDS(out, f)
-    message(sprintf("cdl %d: %d sites on %d cores, %.1f min", yr, nrow(out), cores,
-                    as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+    message(sprintf("cdl %d: %d/%d sites returned metrics on %d cores, %.1f min", yr, nrow(out),
+                    nrow(s_yr), cores, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
   }
   message(sprintf("Done in %.1f min. Outputs in %s", as.numeric(difftime(Sys.time(), t_all, units = "mins")), out_dir))
 
@@ -186,17 +228,20 @@ if (mode == "sites") {
   yr <- as.integer(args[2]); var <- args[3]
   stopifnot(var %in% daymet_vars)
   t0 <- Sys.time()
-  out <- extract_daymet(read_sites(), yr, var)
+  s_yr <- sites_for(read_sites(), read_site_years(), yr, "daymet")
+  out <- extract_daymet(s_yr, yr, var)
   saveRDS(out, file.path(out_dir, sprintf("daymet_%s_%d.rds", var, yr)))
-  message(sprintf("daymet %s %d: %d rows, %.1f min, peak %.2f GB", var, yr, nrow(out),
+  message(sprintf("daymet %s %d: %d sites, %d rows, %.1f min, peak %.2f GB", var, yr, nrow(s_yr), nrow(out),
                   as.numeric(difftime(Sys.time(), t0, units = "mins")), peak_mem_gb()))
 
 } else if (mode == "cdl") {
   yr <- as.integer(args[2])
   t0 <- Sys.time()
-  out <- run_cdl(read_sites(), yr)
+  s_yr <- sites_for(read_sites(), read_site_years(), yr, "cdl")
+  out <- run_cdl(s_yr, yr)
   saveRDS(out, file.path(out_dir, sprintf("cdl_%d.rds", yr)))
-  message(sprintf("cdl %d: %d sites on %d cores, %.1f min, peak %.2f GB", yr, nrow(out), n_cores,
+  message(sprintf("cdl %d: %d/%d sites returned metrics on %d cores, %.1f min, peak %.2f GB",
+                  yr, nrow(out), nrow(s_yr), n_cores,
                   as.numeric(difftime(Sys.time(), t0, units = "mins")), peak_mem_gb()))
 
 } else if (mode == "dryrun") {
@@ -209,19 +254,27 @@ if (mode == "sites") {
   if (length(miss)) { message("MISSING:\n  ", paste(miss, collapse = "\n  ")); quit(status = 1) }
 
   counts_raw <- read.csv(counts_path) %>% filter(longitude >= -105)
-  sites <- make_site_table(counts_raw)
-  message(nrow(sites), " sites")
+  sites      <- make_site_table(counts_raw)
+  site_years <- make_site_years(counts_raw, sites)
+  n_dm  <- sapply(daymet_yrs, function(y) nrow(sites_for(sites, site_years, y, "daymet")))
+  n_cdl <- sapply(yrs, function(y) nrow(sites_for(sites, site_years, y, "cdl")))
+  message(nrow(sites), " sites in total (CEW_SITES=", site_mode, "). Sites per extraction year:")
+  print(data.frame(year = daymet_yrs, daymet = n_dm, cdl = c(NA, n_cdl)), row.names = FALSE)
 
-  # 2. One full Daymet unit (= exactly one array element)
+  # 2. One full Daymet unit (= exactly one array element), the year with most sites
+  y_dm <- daymet_yrs[which.max(n_dm)]
   t0 <- Sys.time()
-  dm <- extract_daymet(sites, max(daymet_yrs), "tmax")
+  dm <- extract_daymet(sites_for(sites, site_years, y_dm, "daymet"), y_dm, "tmax")
   t_dm <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
-  message(sprintf("Daymet unit: %.1f min, %d NA of %d values", t_dm, sum(is.na(dm$tmax)), nrow(dm)))
+  message(sprintf("Daymet unit (%d, %d sites): %.1f min, %d NA of %d values",
+                  y_dm, max(n_dm), t_dm, sum(is.na(dm$tmax)), nrow(dm)))
 
-  # 3. A sample of CDL sites on one core, scaled to all sites / cores
-  n_try <- if (length(args) > 1) as.integer(args[2]) else 20
+  # 3. A sample of the busiest CDL year's sites on one core, scaled to that year / cores
+  y_cdl <- yrs[which.max(n_cdl)]
+  s_cdl <- sites_for(sites, site_years, y_cdl, "cdl")
+  n_try <- min(nrow(s_cdl), if (length(args) > 1) as.integer(args[2]) else 20)
   t0 <- Sys.time()
-  cd <- run_cdl(sites[round(seq(1, nrow(sites), length.out = n_try)), ], max(yrs), cores = 1)
+  cd <- run_cdl(s_cdl[round(seq(1, nrow(s_cdl), length.out = n_try)), ], y_cdl, cores = 1)
   t_cdl <- as.numeric(difftime(Sys.time(), t0, units = "mins")) / n_try
   mem <- peak_mem_gb()
   message(sprintf("CDL: %.2f min per site, %d/%d sites returned metrics", t_cdl, nrow(cd), n_try))
@@ -235,7 +288,7 @@ if (mode == "sites") {
   message("\n--- Suggested settings for hpc/submit_covariates.sh ---")
   message("Peak memory this job (Daymet + CDL sample): ", round(mem, 2), " GB")
   message("DAYMET_TIME=", pad_w(t_dm), "   DAYMET_MEM=", pad_mem(mem))
-  message("CDL_CPUS=", cdl_cores, "   CDL_TIME=", pad_w(t_cdl * nrow(sites) / cdl_cores),
+  message("CDL_CPUS=", cdl_cores, "   CDL_TIME=", pad_w(t_cdl * max(n_cdl) / cdl_cores),
           "   CDL_MEM=", pad_mem(mem, cdl_cores), "   # whole job: each forked worker holds a window")
   message("Array sizes: Daymet ", length(daymet_yrs) * length(daymet_vars), " jobs, CDL ", length(yrs), " jobs")
 

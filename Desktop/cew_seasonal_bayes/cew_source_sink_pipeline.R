@@ -70,9 +70,10 @@ counts  <- counts %>% semi_join(keep_ly, by = c("location2", "year")) %>%
 
 # =============================================================================
 # 2. Daymet climate covariates ------------------------------------------------
-#    ALL days for ALL sites and years (not just trap dates), so each site has
-#    a full climatology even in years it wasn't trapped. Extracted on the HPC:
-#    covariates/daymet_<var>_<year>.rds, one file per variable and year.
+#    All days (not just trap dates) of each extracted year. With CEW_SITES=active
+#    (default) a site is extracted only around the years it was trapped (its
+#    trapped years +/- 1), so its climatology is the mean over those years; with
+#    CEW_SITES=all every site has every year. covariates/daymet_<var>_<year>.rds.
 # =============================================================================
 read_daymet <- function(yr) {                               # previous year for winter
   f <- file.path(cov_dir, sprintf("daymet_%s_%d.rds", c("tmax", "tmin", "prcp"), yr))
@@ -92,7 +93,10 @@ weekly_clim <- daily %>%
   group_by(location2, year, woy) %>%
   summarise(gdd_wk  = sum(gdd_day), tmin_wk = mean(tmin), prcp_wk = sum(prcp),
             agdd_wk = last(agdd),            # accumulated GDD at end of week
-            .groups = "drop") %>%
+            n_days  = n(), .groups = "drop") %>%
+  # Drop weeks cut off where a site's extracted years end (sums would be short);
+  # Daymet's missing Dec 31 in leap years shortens that week for every site alike
+  group_by(year, woy) %>% filter(n_days == max(n_days)) %>% ungroup() %>% select(-n_days) %>%
   group_by(location2, year) %>% arrange(woy, .by_group = TRUE) %>%
   mutate(gdd_wk_lag1 = lag(gdd_wk)) %>% ungroup()
 
@@ -111,7 +115,9 @@ winter <- daily %>%
   mutate(season = ifelse(month(date) == 12, cal_year + 1, cal_year)) %>%
   filter(month(date) %in% c(12, 1, 2), season %in% yrs) %>%
   group_by(location2, year = season) %>%
-  summarise(winter_tmin_min = min(tmin), winter_cold_days = sum(tmin < -10), .groups = "drop") %>%
+  summarise(winter_tmin_min = min(tmin), winter_cold_days = sum(tmin < -10),
+            n_days = n(), .groups = "drop") %>%
+  filter(n_days >= 89) %>% select(-n_days) %>%    # complete Dec-Feb only (89-90 Daymet days)
   group_by(location2) %>%
   mutate(across(c(winter_tmin_min, winter_cold_days), ~ .x - mean(.x), .names = "{.col}_anom")) %>%
   ungroup()
@@ -124,7 +130,11 @@ winter <- daily %>%
 #    Studies summarised in your 2024 review used 1.61 and 16.1 km; choose the
 #    radius per crop by LOO in stage 1 (or keep both if not collinear).
 # =============================================================================
-landscape <- bind_rows(lapply(yrs, function(yr) readRDS(file.path(cov_dir, sprintf("cdl_%d.rds", yr)))))
+#    Each year covers only that year's trapped sites (CEW_SITES=active).
+landscape <- bind_rows(lapply(yrs, function(yr) readRDS(file.path(cov_dir, sprintf("cdl_%d.rds", yr))))) %>%
+  # a class absent around every site in one year is a missing column in that
+  # year's file; across years it is 0, not NA
+  mutate(across(-c(location2, year), ~ coalesce(.x, 0)))
 
 # EVI: same anomaly treatment (site x week climatology removed)
 evi <- read.csv(file.path(root, "pest-occurrence/corn_earworm/MCD43_EVI_points.csv")) %>%

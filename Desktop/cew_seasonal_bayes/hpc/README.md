@@ -78,6 +78,17 @@ Otherwise they go to `covariates/` in the repo.
 
 `export` only lasts for the current login, so set it again before each `sbatch` or `submit_covariates.sh`. Don't use `/share` for outputs: it is purged.
 
+### Sites per year
+
+By default, each year is extracted only for the sites trapped that year. The site step writes `cew_site_years.csv` next to the outputs, listing every site-year with at least one count.
+
+- **CDL:** year Y covers the sites trapped in Y.
+- **Daymet:** the file for calendar year Y covers the sites trapped in Y−1, Y or Y+1. That file holds the December before the next season, and the ISO weeks that cross New Year.
+
+To extract every site in every year instead (the old behaviour), run `export CEW_SITES=all` before submitting.
+
+The choice changes weather anomalies. With per-year sites, each site's climatology averages only its own extracted years. With `CEW_SITES=all`, it averages 2008–2020.
+
 ## 5. Dry run [submitted from Hazel, runs on a compute node]
 
 Run from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`:
@@ -96,6 +107,7 @@ seff <jobid>
 
 What the log shows:
 - **`N/56 input files found`:** if any files are missing, the job stops and lists them. Fix the paths, then resubmit.
+- **Sites per extraction year:** a table of how many sites each Daymet file and CDL year covers. Timings use the busiest year.
 - **Sites returned:** sites outside the US get no CDL metrics. That is expected.
 - **Suggested settings:** the `DAYMET_*` and `CDL_*` values to use.
 - **`seff`:** *Memory Utilized* and *Wall-clock time*. Trust these if they differ from the suggestions.
