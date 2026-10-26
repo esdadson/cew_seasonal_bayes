@@ -40,11 +40,11 @@ If the repo is private, use a GitHub personal access token as the password.
 
 1. **Check your group and package-library space.** Hazel's docs put R packages in `/usr/local/usrapps/<group>/<user>/libs/R`.
    ```bash
-   groups                               # should include cmjone25
+   groups                               # should include rkmeente
    ls -ld /usr/local/usrapps/*/$USER    # your own folder, if one exists
-   ls -ld /usr/local/usrapps/cmjone25   # must exist; if not, ask your PI to request usrapps space
+   ls -ld /usr/local/usrapps/rkmeente   # must exist; if not, ask your PI to request usrapps space
    ```
-   You need a folder you can write to there. If `mkdir /usr/local/usrapps/cmjone25/$USER` gives *Permission denied*, ask your PI to create it and give you ownership (`chown`), or email help@ncsu.edu.
+   You need a folder you can write to there. If `mkdir /usr/local/usrapps/rkmeente/$USER` gives *Permission denied*, ask your PI to create it and give you ownership (`chown`), or email help@ncsu.edu.
    If your folder is under a different group, put it in `~/.bashrc` and log in again:
    ```bash
    echo 'export CEW_APPS=/usr/local/usrapps/<group>/$USER' >> ~/.bashrc
@@ -258,9 +258,9 @@ Use this only if `terra` can't be built against Hazel's modules. Do these steps 
 
 ```bash
 module load conda && conda init bash        # then log out and back in
-mkdir -p /share/cmjone25/$USER/conda/pkgs
-printf "pkgs_dirs:\n  - /share/cmjone25/$USER/conda/pkgs\nchannels:\n  - conda-forge\n" > ~/.condarc
-conda env create --prefix /share/cmjone25/$USER/cew_env -f hpc/cew_env.yml
+mkdir -p /share/rkmeente/$USER/conda/pkgs
+printf "pkgs_dirs:\n  - /share/rkmeente/$USER/conda/pkgs\nchannels:\n  - conda-forge\n" > ~/.condarc
+conda env create --prefix /share/rkmeente/$USER/cew_env -f hpc/cew_env.yml
 ```
 
 Then set `R_SETUP=${R_SETUP:-conda}` in `hpc/r_env.sh`.

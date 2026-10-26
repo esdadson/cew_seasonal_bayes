@@ -9,9 +9,9 @@ R_MODULES=${R_MODULES:-"R"}
 # name (e.g. gdal/3.8.4), put it here.
 R_OPTIONAL_MODULES=${R_OPTIONAL_MODULES:-"gdal proj geos"}
 # Where your packages and CmdStan live (Hazel docs: /usr/local/usrapps/$GROUP/$USER).
-# You need write access there; if your usrapps group isn't cmjone25, set
+# You need write access there; if your usrapps group isn't rkmeente, set
 # CEW_APPS in ~/.bashrc, e.g. export CEW_APPS=/usr/local/usrapps/<group>/$USER
-CEW_APPS=${CEW_APPS:-/usr/local/usrapps/cmjone25/$USER}
+CEW_APPS=${CEW_APPS:-/usr/local/usrapps/rkmeente/$USER}
 export R_LIBS_USER=${R_LIBS_USER:-$CEW_APPS/libs/R}
 # CmdStan for brms/cmdstanr (hpc/install_stan.sh). cmdstanr uses the newest
 # cmdstan-<version> folder inside this directory.
@@ -19,7 +19,7 @@ export CMDSTAN=${CMDSTAN:-$CEW_APPS/cmdstan}
 # The project's .Rprofile starts renv (the laptop's package library); on Hazel
 # packages come from $R_LIBS_USER, so keep renv off
 export RENV_CONFIG_AUTOLOADER_ENABLED=FALSE
-CONDA_ENV=${CONDA_ENV:-/share/cmjone25/$USER/cew_env}
+CONDA_ENV=${CONDA_ENV:-/share/rkmeente/$USER/cew_env}
 
 # ~/.bashrc defines `module`/conda; a failing line in it must not silently end
 # a caller running under `set -e` (the install scripts), so pause errexit
