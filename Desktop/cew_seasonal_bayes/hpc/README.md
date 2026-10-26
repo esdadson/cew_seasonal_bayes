@@ -1,8 +1,8 @@
-# Running the covariate extraction on Hazel
+# Running the covariate extraction and the stage-1 fit on Hazel
 
-This extracts Daymet weather and CDL landscape metrics for every trap site (sections 2–3 of `cew_source_sink_pipeline.R`) as Slurm jobs on Hazel. The output files are then read by the pipeline.
+Steps 1–9 extract Daymet weather and CDL landscape metrics for every trap site (sections 2–3 of `cew_source_sink_pipeline.R`) as Slurm jobs on Hazel. The output files are then read by the pipeline. Step 10 fits the stage-1 seasonal model (section 5).
 
-> **Rule:** never run analysis code on a login node. Login nodes are for editing, `git`, `module`, installing packages, and `sbatch`/`squeue`/`seff`. Every step that runs the analysis is submitted with `sbatch`. As a safeguard, `cew_covariates_hpc.R` refuses to start on Hazel unless it is inside a Slurm job.
+> **Rule:** never run analysis code on a login node. Login nodes are for editing, `git`, `module`, installing packages, and `sbatch`/`squeue`/`seff`. Every step that runs the analysis is submitted with `sbatch`. As a safeguard, `cew_covariates_hpc.R` and `cew_stage1_hpc.R` refuse to start on Hazel unless they are inside a Slurm job.
 
 Where each step runs:
 - **[Mac]**: your laptop.
@@ -176,6 +176,63 @@ Sys.setenv(CEW_OUT = "/Volumes/cmjone25/Data/Original/pest-occurrence/corn_earwo
 Then run `cew_source_sink_pipeline.R`.
 
 The pipeline stops if its site table doesn't match the one the HPC jobs used. If that happens, re-run step 7.
+
+## 10. Fit the stage-1 model [Hazel]
+
+`cew_stage1_hpc.R` fits the stage-1 seasonal model (your fit_gp2.1 model, in `cew_stage1_data.R`) on 2008–2019. The pipeline then only reads the saved fit. The exact GP makes each iteration slow: on the laptop, 3,100 iterations took about 13 hours.
+
+Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
+
+1. **Inputs.** The job rebuilds the modelling data, so it needs the covariates from steps 7–8 in `$CEW_OUT` (or `covariates/`). It also reads these files under `$CEW_DATA/Original/pest-occurrence/corn_earworm/`:
+   - `Lawton_etal_data.csv` (in the dryad folder)
+   - `MCD43_EVI_points.csv`
+   - `cew_landscape_metrics_full_timeseries.csv`
+
+2. **Install Stan (one time, login node).**
+   ```bash
+   ./hpc/install_stan.sh
+   ```
+   - It installs `brms`, `cmdstanr`, `posterior`, `zoo` and `lubridate`, then CmdStan into `/usr/local/usrapps/cmjone25/$USER/cmdstan`.
+   - `brms` compiles `rstan`, and CmdStan compiles itself, so expect an hour or more.
+   - It finishes with `All available` and the CmdStan version.
+   - If `hpc/install_r_packages.sh` hasn't been run yet, run it first: `terra` is needed too.
+
+3. **Dry run.** It compiles the model and runs one short chain (150 warmup + 50 sampling iterations) on the full training data. Give it the settings you plan to use for the full run:
+   ```bash
+   STAGE1_CHAINS=4 STAGE1_ITER=20000 STAGE1_WARMUP=19000 STAGE1_THIN=4 sbatch hpc/stage1_dryrun.sbatch
+   ```
+   When it's finished:
+   ```bash
+   tail -25 logs/stage1_dryrun.<jobid>.out
+   seff <jobid>
+   ```
+   What the log shows:
+   - **Seconds per gradient and leapfrog steps per iteration.** Time per iteration is the number of steps × seconds per gradient. An iteration takes at most 1,023 steps (tree depth 10).
+   - **Share of iterations at max tree depth.** If it's near 100%, every iteration costs the maximum, and the worst-case estimate is the realistic one.
+   - **Hours per chain**, at the dry run's tree depth and in the worst case. Chains run in parallel, so this is the job's wall time.
+   - **Suggested `STAGE1_TIME`, `STAGE1_QOS` and `STAGE1_MEM`.** Time is the worst case × 1.15 + 1 h. Hazel's `normal` QOS allows up to 4 days and `long` up to 10. Above 10 days, the log gives the largest `STAGE1_ITER` that fits.
+
+4. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_stage1.sh`:
+   ```bash
+   nano hpc/submit_stage1.sh
+   ```
+   Keep the sampler settings there the same as in the dry run. The script requests one core per chain.
+
+5. **Full run.**
+   ```bash
+   MAIL_USER=<unityID>@ncsu.edu ./hpc/submit_stage1.sh    # MAIL_USER is optional: email when it ends
+   tail -f logs/stage1.<jobid>.out                         # progress every 100 iterations; Ctrl-C stops watching only
+   ```
+   - It writes `fit1_gp21_train.rds` and prints the summary, divergences, the tree-depth share and the largest R-hat.
+   - CmdStan's draws are also kept in `stan_csv/`. If R fails after sampling, read them with `cmdstanr::as_cmdstan_fit(list.files("stan_csv", full.names = TRUE))` instead of refitting.
+   - Stan can't resume a chain, so a job that runs out of time loses everything. That's why the requested time is padded.
+
+6. **Copy the fit back [Mac].**
+   ```bash
+   rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/fit1_gp21_train.rds \
+     ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/
+   ```
+   The pipeline reads it in section 5 and never refits it (`file_refit = "never"`). Delete the file to refit, for example after changing the data or the model.
 
 ## Quick reference
 

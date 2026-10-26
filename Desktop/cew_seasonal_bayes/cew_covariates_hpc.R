@@ -157,7 +157,7 @@ run_cdl <- function(sites, yr, cores = n_cores) {
   xy <- crds(project(vect(sites, geom = c("longitude", "latitude"), crs = "EPSG:4326"), crs(r0)))
   sites_xy <- data.frame(location2 = sites$location2, x = xy[, 1], y = xy[, 2])
   chunks <- split(sites_xy, (seq_len(nrow(sites_xy)) - 1) %% cores)   # interleaved: spreads slow regions
-  long <- bind_rows(parallel::mclapply(chunks, cdl_sites, yr = yr, mc.cores = cores))
+  long <- bind_rows(parallel::mclapply(chunks, cdl_sites, yr = yr, mc.cores = 1))
   if (!nrow(long)) return(empty)                      # e.g. every site outside the CDL
   long %>%
     mutate(class = class_names[as.character(class)]) %>%

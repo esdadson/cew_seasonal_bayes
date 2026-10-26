@@ -9,6 +9,12 @@ R_MODULES=${R_MODULES:-"R"}
 # name (e.g. gdal/3.8.4), put it here.
 R_OPTIONAL_MODULES=${R_OPTIONAL_MODULES:-"gdal proj geos"}
 export R_LIBS_USER=${R_LIBS_USER:-/usr/local/usrapps/cmjone25/$USER/libs/R}
+# CmdStan for brms/cmdstanr (hpc/install_stan.sh). cmdstanr uses the newest
+# cmdstan-<version> folder inside this directory.
+export CMDSTAN=${CMDSTAN:-/usr/local/usrapps/cmjone25/$USER/cmdstan}
+# The project's .Rprofile starts renv (the laptop's package library); on Hazel
+# packages come from $R_LIBS_USER, so keep renv off
+export RENV_CONFIG_AUTOLOADER_ENABLED=FALSE
 CONDA_ENV=${CONDA_ENV:-/share/cmjone25/$USER/cew_env}
 
 source ~/.bashrc

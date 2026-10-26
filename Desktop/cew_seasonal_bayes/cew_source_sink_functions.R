@@ -42,6 +42,21 @@ make_site_table <- function(counts_raw) {
 }
 
 # -----------------------------------------------------------------------------
+# Standardise with means/sds from reference rows (the training years), so
+# held-out and prediction rows are put on the scale the model was fit on.
+#   map: named character vector, new column = source column
+# Returns a function df -> df that (re)computes the new columns.
+# -----------------------------------------------------------------------------
+make_scaler <- function(ref, map) {
+  m <- vapply(map, function(v) mean(ref[[v]], na.rm = TRUE), numeric(1))
+  s <- vapply(map, function(v) sd(ref[[v]], na.rm = TRUE), numeric(1))
+  function(df) {
+    for (k in names(map)) df[[k]] <- (df[[map[[k]]]] - m[[k]]) / s[[k]]
+    df
+  }
+}
+
+# -----------------------------------------------------------------------------
 # Fourier basis on ISO week (period = 52 weeks)
 # -----------------------------------------------------------------------------
 add_fourier <- function(df, H = 3, week_col = "woy", period = 52) {
@@ -257,4 +272,27 @@ grid_screen <- function(obs, P_list, tw_index, lags = 0:8, df = 4,
   out <- t(sapply(built, function(o)
     loyo_gain(o[keep, ], colnames(B), base_terms, response)))
   data.frame(setting = names(P_list), out, row.names = NULL)
+}
+
+# -----------------------------------------------------------------------------
+# Out-of-sample scores
+#   lpd_pointwise: log predictive density per observation from log_lik()
+#     draws (draws x obs) computed on the held-out data
+#   oos_scores: y, predictive draws (draws x obs), pointwise lpd ->
+#     RMSE/MAE/bias of the predictive mean, central 90% interval coverage, ELPD
+#   score_by: oos_scores within groups plus "all"
+# -----------------------------------------------------------------------------
+lpd_pointwise <- function(ll) apply(ll, 2, function(l) max(l) + log(mean(exp(l - max(l)))))
+
+oos_scores <- function(y, pred, lpd) {
+  mu <- colMeans(pred)
+  q  <- apply(pred, 2, quantile, c(0.05, 0.95))
+  data.frame(n = length(y), rmse = sqrt(mean((y - mu)^2)), mae = mean(abs(y - mu)),
+             bias = mean(mu - y), cover90 = mean(y >= q[1, ] & y <= q[2, ]),
+             elpd = sum(lpd), elpd_per_obs = mean(lpd))
+}
+
+score_by <- function(y, pred, lpd, group) {
+  idx <- c(split(seq_along(y), group), list(all = seq_along(y)))
+  bind_rows(lapply(idx, function(i) oos_scores(y[i], pred[, i, drop = FALSE], lpd[i])), .id = "group")
 }
