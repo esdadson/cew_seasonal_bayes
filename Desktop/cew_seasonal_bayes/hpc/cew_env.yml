@@ -1,7 +1,8 @@
-# Conda environment for cew_covariates_hpc.R on Hazel (sf/terra need GDAL,
-# which conda-forge supplies; compiling them from source on the cluster is painful).
-#   module load conda
-#   conda env create -f hpc/cew_env.yml -p /share/rkmeente/$USER/cew_env
+# Conda environment for the HPC jobs (cew_covariates_hpc.R, cew_stage1_hpc.R).
+# conda-forge supplies terra with GDAL/PROJ/GEOS and brms/cmdstanr with a
+# prebuilt CmdStan (which sets $CMDSTAN on activation) and its C++ compiler.
+# Create on a login node (see hpc/README.md step 3):
+#   conda env create -f hpc/cew_env.yml -p /usr/local/usrapps/rkmeente/$USER/cew_env
 name: cew_env
 channels:
   - conda-forge
@@ -12,3 +13,10 @@ dependencies:
   - r-terra
   - r-landscapemetrics
   - r-geosphere
+  - r-zoo
+  - r-lubridate
+  - r-ggplot2
+  - r-posterior
+  - r-brms
+  - r-cmdstanr
+  - cmdstan

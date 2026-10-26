@@ -8,7 +8,7 @@ Where each step runs:
 - **[Mac]**: your laptop.
 - **[Hazel]**: a login node, via `ssh`.
 
-R comes from Hazel's R module, with packages in a personal library, so no conda environment is needed. Conda remains a fallback (appendix).
+R and all packages come from a conda environment (step 3). Hazel's R module is a fallback (appendix).
 
 ## 0. Push the code [Mac]
 
@@ -38,40 +38,42 @@ If the repo is private, use a GitHub personal access token as the password.
 
 ## 3. Set up R (one time) [Hazel]
 
-1. **Check your group and package-library space.** Hazel's docs put R packages in `/usr/local/usrapps/<group>/<user>/libs/R`.
+R and every package come from one conda environment built from `hpc/cew_env.yml`. conda-forge ships `terra` already built with GDAL, PROJ and GEOS, plus `brms`, `cmdstanr` and CmdStan with its C++ compiler. Nothing compiles against Hazel's modules, and you don't need the `gis` software group. Hazel's R page recommends conda for packages with external dependencies.
+
+1. **Check your software folder.** It goes in `/usr/local/usrapps/<group>/<user>`.
    ```bash
    groups                               # should include rkmeente
    ls -ld /usr/local/usrapps/*/$USER    # your own folder, if one exists
-   ls -ld /usr/local/usrapps/rkmeente   # must exist; if not, ask your PI to request usrapps space
+   mkdir -p /usr/local/usrapps/rkmeente/$USER
    ```
-   You need a folder you can write to there. If `mkdir /usr/local/usrapps/rkmeente/$USER` gives *Permission denied*, ask your PI to create it and give you ownership (`chown`), or email help@ncsu.edu.
-   If your folder is under a different group, put it in `~/.bashrc` and log in again:
+   - If `mkdir` gives *Permission denied*, ask your PI to create the folder and give you ownership (`chown`), or email help@ncsu.edu.
+   - If your folder is under a different group, put it in `~/.bashrc` and log in again:
+     ```bash
+     echo 'export CEW_APPS=/usr/local/usrapps/<group>/$USER' >> ~/.bashrc
+     ```
+
+2. **Remove any `~/.Renviron`.** Hazel's docs say conda R must not see a personal library. If an earlier `R_LIBS` line is there, delete it:
    ```bash
-   echo 'export CEW_APPS=/usr/local/usrapps/<group>/$USER' >> ~/.bashrc
+   cat ~/.Renviron 2>/dev/null        # if it sets R_LIBS: rm ~/.Renviron
    ```
-   `hpc/r_env.sh` puts the R packages in `$CEW_APPS/libs/R` and CmdStan in `$CEW_APPS/cmdstan`.
 
-2. **Modules are set in `hpc/r_env.sh`.** You shouldn't need to edit it.
-   - `module load R` (R 4.4.0, Hazel's documented default) is always loaded.
-   - `gdal`, `proj` and `geos` are loaded if they exist. `terra` needs them to compile and run.
-   - The installer and every job print which modules were loaded. If GDAL is missing, they also print `no gdal-config on PATH`.
-
-   If that warning appears, check what's available:
+3. **Create the environment.** This runs on the login node, because compute nodes have no internet. It only installs software and runs no analysis. Expect 20–60 minutes.
    ```bash
-   module avail gdal ; module avail proj ; module avail geos
+   module load conda
+   mkdir -p /share/rkmeente/$USER/conda/pkgs            # download cache only; /share is purged, which is fine
+   conda config --add pkgs_dirs /share/rkmeente/$USER/conda/pkgs
+   conda env create -f hpc/cew_env.yml -p ${CEW_APPS:-/usr/local/usrapps/rkmeente/$USER}/cew_env
    ```
-   - **Versioned names** (e.g. `gdal/3.8.4`): put those in `R_OPTIONAL_MODULES` in `hpc/r_env.sh`.
-   - **Nothing:** GDAL on Hazel comes through the `gis` software group. Email HPC support to request access, or use the conda fallback in the appendix.
+   To add packages later, edit `hpc/cew_env.yml` and run `conda env update -f hpc/cew_env.yml -p <same path>`.
 
-3. **Install the packages.** This runs on the login node, which Hazel's docs require: compute nodes have no internet. It only installs packages and runs no analysis.
+4. **Check it.**
    ```bash
-   ./hpc/install_r_packages.sh
+   source hpc/r_env.sh
+   Rscript -e 'library(terra); library(brms); cat("CmdStan", cmdstanr::cmdstan_version(), "\n")'
    ```
-   - It installs only what is missing from `terra`, `landscapemetrics`, `dplyr`, `tidyr` and `geosphere`.
-   - Compiling `terra` can take 20–40 minutes.
-   - It finishes with `All packages available` or names the packages that failed.
+   `r_env.sh` prints the environment, R and CmdStan paths, and the R command prints the CmdStan version. Running these two `library()` calls on the login node is allowed: they're a check, not an analysis.
 
-   **If `terra` fails to compile** (errors mentioning `gdal-config`, `proj` or `geos`), see step 3.2.
+   Every job script sources `hpc/r_env.sh`, so the jobs use this environment automatically.
 
 ## 4. Choose where outputs go (optional) [Hazel]
 
@@ -120,8 +122,7 @@ What the log shows:
 - **`seff`:** *Memory Utilized* and *Wall-clock time*. Trust these if they differ from the suggestions.
 
 If the job fails:
-- **`there is no package called ...`:** re-run step 3.3.
-- **`libgdal... cannot open shared object`:** the job didn't load the GDAL module the packages were built with. See step 3.2.
+- **`there is no package called ...`** or **`no conda env at ...`:** the environment from step 3 is missing or incomplete. Re-run step 3.3, or step 3.4 to check it.
 
 ## 6. Set resources [Hazel]
 
@@ -195,14 +196,7 @@ Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
    - `MCD43_EVI_points.csv`
    - `cew_landscape_metrics_full_timeseries.csv`
 
-2. **Install Stan (one time, login node).**
-   ```bash
-   ./hpc/install_stan.sh
-   ```
-   - It installs `brms`, `cmdstanr`, `posterior`, `zoo` and `lubridate`, then CmdStan into `$CEW_APPS/cmdstan` (see step 3.1).
-   - `brms` compiles `rstan`, and CmdStan compiles itself, so expect an hour or more.
-   - It finishes with `All available` and the CmdStan version.
-   - If `hpc/install_r_packages.sh` hasn't been run yet, run it first: `terra` is needed too.
+2. **Software.** The conda environment from step 3 already includes `brms`, `cmdstanr` and CmdStan, so there is nothing more to install. Step 3.4 checks it. (`hpc/install_stan.sh` is only for the module setup in the appendix.)
 
 3. **Dry run.** It compiles the model and runs one short chain (150 warmup + 50 sampling iterations) on the full training data. Give it the settings you plan to use for the full run:
    ```bash
@@ -252,19 +246,16 @@ Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
 
 If `sbatch` rejects `--partition=compute`, change it in `hpc/dryrun.sbatch` and in `PARTITION` in `hpc/submit_covariates.sh`.
 
-## Appendix: conda fallback
+## Appendix: Hazel's R module instead of conda
 
-Use this only if `terra` can't be built against Hazel's modules. Do these steps instead of step 3.3. All commands run on the login node.
+This builds the packages from source against `module load R`, which needs GDAL, PROJ and GEOS modules (the `gis` software group). Use it only if conda isn't an option. All commands run on the login node.
 
 ```bash
-module load conda && conda init bash        # then log out and back in
-mkdir -p /share/rkmeente/$USER/conda/pkgs
-printf "pkgs_dirs:\n  - /share/rkmeente/$USER/conda/pkgs\nchannels:\n  - conda-forge\n" > ~/.condarc
-conda env create --prefix /share/rkmeente/$USER/cew_env -f hpc/cew_env.yml
+export R_SETUP=module                 # or set R_SETUP=${R_SETUP:-module} in hpc/r_env.sh
+./hpc/install_r_packages.sh           # terra, landscapemetrics, dplyr, tidyr, geosphere
+./hpc/install_stan.sh                 # brms, cmdstanr, CmdStan (an hour or more)
 ```
 
-Then set `R_SETUP=${R_SETUP:-conda}` in `hpc/r_env.sh`.
-
-`/share` is purged, so if a job fails at `conda activate`, re-run the `conda env create` line.
+Packages go to `$CEW_APPS/libs/R` and CmdStan to `$CEW_APPS/cmdstan`. To use the versioned GDAL/PROJ/GEOS modules that `module avail gdal` shows, put their names in `R_OPTIONAL_MODULES` in `hpc/r_env.sh`.
 
 Policies: [Hazel AUP](https://hpc.ncsu.edu/About/AUP.php), [R on Hazel](https://hpc.ncsu.edu/Software/Apps.php?app=R), [LSF→Slurm guide](https://hpc.ncsu.edu/RunningJobs/Migration.php). Help: help@ncsu.edu
