@@ -41,8 +41,15 @@ If the repo is private, use a GitHub personal access token as the password.
 1. **Check your group and package-library space.** Hazel's docs put R packages in `/usr/local/usrapps/<group>/<user>/libs/R`.
    ```bash
    groups                               # should include cmjone25
-   ls /usr/local/usrapps/cmjone25       # must exist; if not, ask your PI to request usrapps space
+   ls -ld /usr/local/usrapps/*/$USER    # your own folder, if one exists
+   ls -ld /usr/local/usrapps/cmjone25   # must exist; if not, ask your PI to request usrapps space
    ```
+   You need a folder you can write to there. If `mkdir /usr/local/usrapps/cmjone25/$USER` gives *Permission denied*, ask your PI to create it and give you ownership (`chown`), or email help@ncsu.edu.
+   If your folder is under a different group, put it in `~/.bashrc` and log in again:
+   ```bash
+   echo 'export CEW_APPS=/usr/local/usrapps/<group>/$USER' >> ~/.bashrc
+   ```
+   `hpc/r_env.sh` puts the R packages in `$CEW_APPS/libs/R` and CmdStan in `$CEW_APPS/cmdstan`.
 
 2. **Modules are set in `hpc/r_env.sh`.** You shouldn't need to edit it.
    - `module load R` (R 4.4.0, Hazel's documented default) is always loaded.
@@ -192,7 +199,7 @@ Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
    ```bash
    ./hpc/install_stan.sh
    ```
-   - It installs `brms`, `cmdstanr`, `posterior`, `zoo` and `lubridate`, then CmdStan into `/usr/local/usrapps/cmjone25/$USER/cmdstan`.
+   - It installs `brms`, `cmdstanr`, `posterior`, `zoo` and `lubridate`, then CmdStan into `$CEW_APPS/cmdstan` (see step 3.1).
    - `brms` compiles `rstan`, and CmdStan compiles itself, so expect an hour or more.
    - It finishes with `All available` and the CmdStan version.
    - If `hpc/install_r_packages.sh` hasn't been run yet, run it first: `terra` is needed too.
