@@ -45,5 +45,5 @@ else
     module load "$m" >/dev/null 2>&1 && R_LOADED="$R_LOADED $m"
   done
   echo "r_env.sh: loaded modules: $R_LOADED"
-  command -v gdal-config >/dev/null || echo "r_env.sh: no gdal-config on PATH (terra can't compile without GDAL)" >&2
+  command -v gdal-config >/dev/null || echo "r_env.sh: no gdal-config on PATH (terra can't compile without GDAL) - use conda instead: unset R_SETUP (hpc/README.md step 3)" >&2
 fi

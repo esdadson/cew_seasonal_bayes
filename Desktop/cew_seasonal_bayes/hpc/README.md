@@ -61,9 +61,10 @@ R and every package come from one conda environment built from `hpc/cew_env.yml`
    ```bash
    module load conda
    mkdir -p /share/rkmeente/$USER/conda/pkgs            # download cache only; /share is purged, which is fine
-   conda config --add pkgs_dirs /share/rkmeente/$USER/conda/pkgs
+   export CONDA_PKGS_DIRS=/share/rkmeente/$USER/conda/pkgs
    conda env create -f hpc/cew_env.yml -p ${CEW_APPS:-/usr/local/usrapps/rkmeente/$USER}/cew_env
    ```
+   `CONDA_PKGS_DIRS` keeps the downloads (several GB) out of your home directory, which is too small for them. If you see `Disk quota exceeded` under `/home/$USER/.conda/pkgs`, run `rm -rf ~/.conda/pkgs` and the folder `-p` points to, then run these lines again.
    To add packages later, edit `hpc/cew_env.yml` and run `conda env update -f hpc/cew_env.yml -p <same path>`.
 
 4. **Check it.**
