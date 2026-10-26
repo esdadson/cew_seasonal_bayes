@@ -17,7 +17,12 @@ export CMDSTAN=${CMDSTAN:-/usr/local/usrapps/cmjone25/$USER/cmdstan}
 export RENV_CONFIG_AUTOLOADER_ENABLED=FALSE
 CONDA_ENV=${CONDA_ENV:-/share/cmjone25/$USER/cew_env}
 
-source ~/.bashrc
+# ~/.bashrc defines `module`/conda; a failing line in it must not silently end
+# a caller running under `set -e` (the install scripts), so pause errexit
+echo "r_env.sh: setting up R ($R_SETUP)"
+case $- in *e*) _errexit=1; set +e ;; *) _errexit= ;; esac
+[ -f ~/.bashrc ] && source ~/.bashrc
+[ -n "$_errexit" ] && set -e
 if [ "$R_SETUP" = conda ]; then
   conda activate "$CONDA_ENV"         # Hazel docs: don't also `module load R`
 else
