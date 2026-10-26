@@ -1,4 +1,4 @@
-#!/bin/bash
+!/bin/bash
 #SBATCH --job-name=cew_s1_dry
 #SBATCH --partition=compute
 #SBATCH --nodes=1

@@ -29,6 +29,9 @@ if [ "$R_SETUP" = conda ]; then
   unset R_LIBS_USER R_LIBS
   if [ -d "$CONDA_ENV" ]; then
     conda activate "$CONDA_ENV" || { echo "r_env.sh: could not activate $CONDA_ENV" >&2; return 1; }
+    # conda-forge cmdstan sets $CMDSTAN on activation; fall back to where it installs
+    [ -z "$CMDSTAN" ] && [ -d "$CONDA_PREFIX/bin/cmdstan" ] && export CMDSTAN=$CONDA_PREFIX/bin/cmdstan
+    [ -z "$CMDSTAN" ] && echo "r_env.sh: CmdStan missing from $CONDA_ENV - finish it with: conda env update -f hpc/cew_env.yml -p $CONDA_ENV" >&2
     echo "r_env.sh: conda env $CONDA_ENV; R: $(command -v Rscript); CmdStan: ${CMDSTAN:-none}"
   else
     echo "r_env.sh: no conda env at $CONDA_ENV - create it from hpc/cew_env.yml (hpc/README.md step 3)" >&2

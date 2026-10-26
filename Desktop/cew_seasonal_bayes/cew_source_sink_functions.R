@@ -35,8 +35,10 @@ make_site_table <- function(counts_raw) {
     mutate(location2 = row_number())
   # Projected coordinates (km) for the GP - degrees of longitude shrink with
   # latitude, so scaled lon/lat is not isotropic
-  xy <- terra::crds(terra::project(
-    terra::vect(as.data.frame(sites), geom = c("longitude", "latitude"), crs = "EPSG:4326"), "EPSG:5070")) / 1000
+  # (matrix in, matrix out: one row per site even if a point fails to project,
+  # where crds() of a SpatVector drops it and the columns no longer line up)
+  xy <- terra::project(cbind(sites$longitude, sites$latitude), from = "EPSG:4326", to = "EPSG:5070") / 1000
+  if (anyNA(xy)) warning(sum(!complete.cases(xy)), " of ", nrow(xy), " sites could not be projected to EPSG:5070")
   sites$x_km <- xy[, 1]; sites$y_km <- xy[, 2]
   sites
 }
