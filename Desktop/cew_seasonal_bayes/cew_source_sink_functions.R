@@ -35,12 +35,26 @@ make_site_table <- function(counts_raw) {
     mutate(location2 = row_number())
   # Projected coordinates (km) for the GP - degrees of longitude shrink with
   # latitude, so scaled lon/lat is not isotropic
-  # (matrix in, matrix out: one row per site even if a point fails to project,
-  # where crds() of a SpatVector drops it and the columns no longer line up)
-  xy <- terra::project(cbind(sites$longitude, sites$latitude), from = "EPSG:4326", to = "EPSG:5070") / 1000
-  if (anyNA(xy)) warning(sum(!complete.cases(xy)), " of ", nrow(xy), " sites could not be projected to EPSG:5070")
+  # (closed-form, not terra::project: on Hazel's conda env PROJ returned NA
+  # for every site, which left the GP with no usable rows)
+  xy <- albers_km(sites$longitude, sites$latitude)
+  if (anyNA(xy)) stop(sum(!complete.cases(xy)), " of ", nrow(xy), " sites could not be projected to EPSG:5070")
   sites$x_km <- xy[, 1]; sites$y_km <- xy[, 2]
   sites
+}
+
+# CONUS Albers equal-area conic (EPSG:5070: GRS80, standard parallels 29.5 and
+# 45.5, origin 23N 96W), km. Snyder (1987) eqs. 14-3 to 14-15; agrees with
+# PROJ to ~1 m (lon/lat taken as NAD83).
+albers_km <- function(lon, lat) {
+  a <- 6378137; f <- 1 / 298.257222101; e2 <- 2 * f - f^2; e <- sqrt(e2); rad <- pi / 180
+  q <- function(p) { s <- sin(p); (1 - e2) * (s / (1 - e2 * s^2) - log((1 - e * s) / (1 + e * s)) / (2 * e)) }
+  m <- function(p) cos(p) / sqrt(1 - e2 * sin(p)^2)
+  p0 <- 23 * rad; p1 <- 29.5 * rad; p2 <- 45.5 * rad; l0 <- -96 * rad
+  n   <- (m(p1)^2 - m(p2)^2) / (q(p2) - q(p1)); C <- m(p1)^2 + n * q(p1)
+  rho <- function(p) a * sqrt(C - n * q(p)) / n
+  th  <- n * (lon * rad - l0)
+  cbind(rho(lat * rad) * sin(th), rho(p0) - rho(lat * rad) * cos(th)) / 1000
 }
 
 # -----------------------------------------------------------------------------

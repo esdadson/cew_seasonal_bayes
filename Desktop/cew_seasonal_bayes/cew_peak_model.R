@@ -99,6 +99,11 @@ make_f_peak <- function(model) bf(as.formula(paste(
 peak_model <- Sys.getenv("PEAK_MODEL", "site")
 stopifnot(peak_model %in% names(peak_terms))
 f_peak <- make_f_peak(peak_model)
+# brms drops rows with any NA in the formula's variables; fail here, naming
+# the column, rather than at compile time with "all observations removed"
+na_vars <- all.vars(f_peak$formula)
+na_vars <- na_vars[colSums(is.na(d_obs[intersect(na_vars, names(d_obs))])) > 0]
+if (length(na_vars)) stop("NA in model variables of the observed rows: ", paste(na_vars, collapse = ", "))
 # Output files of the chosen candidate
 peak_files <- function(model = peak_model)
   list(fit = paste0("fit_peak_", model), draws = paste0("peak_draws_", model, ".rds"),
