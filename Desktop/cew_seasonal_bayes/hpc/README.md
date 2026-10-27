@@ -236,6 +236,45 @@ Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
    ```
    The pipeline reads it in section 5 and never refits it (`file_refit = "never"`). Delete the file to refit, for example after changing the data or the model.
 
+## 11. Fit the step-1 peak model [Hazel]
+
+`cew_peak_hpc.R` fits the weekly peak-timing model in `cew_peak_model.R` and runs its leave-one-year-out (LOYO) refits. `cew_peak_granger.R` then only reads their outputs. The model uses an approximate GP (exponential kernel) and fits all years 2008–2020. Each fold of the LOYO array holds out one year.
+
+There are two candidate models, chosen with `PEAK_MODEL`. `site` has zone curves, site curve offsets, the GP and a year level. `zone_year` adds zone-year curve shifts. `submit_peak.sh` runs both (`PEAK_MODELS="site zone_year"`). `cew_peak_granger.R` section 3 compares them with `loo_compare` (PSIS-LOO) and on the LOYO folds. The sampler uses `adapt_delta = 0.95` and `max_treedepth = 12` (`peak_control` in `cew_peak_model.R`). Set the run length with `PEAK_ITER` and `PEAK_WARMUP`.
+
+Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`. The inputs are the same as in step 10.1.
+
+1. **Dry run.** It compiles the model and runs one short chain (150 warmup + 50 sampling iterations) with the full run's threads per chain:
+   ```bash
+   PEAK_MODEL=zone_year PEAK_CHAINS=4 PEAK_ITER=4000 PEAK_WARMUP=2000 PEAK_THREADS=4 sbatch hpc/peak_dryrun.sbatch
+   ```
+   `--cpus-per-task` in `hpc/peak_dryrun.sbatch` must be at least `PEAK_THREADS`. When it's finished:
+   ```bash
+   tail -25 logs/peak_dryrun.<jobid>.out
+   seff <jobid>
+   ```
+   The log shows seconds per gradient, leapfrog steps, the share of iterations at max tree depth, the hours per chain, and suggested `PEAK_TIME`, `PEAK_QOS` and `PEAK_MEM`.
+
+2. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_peak.sh`. Each job requests `PEAK_CHAINS × PEAK_THREADS` cores.
+
+3. **Full fit and LOYO.**
+   ```bash
+   chmod +x hpc/submit_peak.sh                           # once, if git didn't keep the execute bit
+   MAIL_USER=<unityID>@ncsu.edu ./hpc/submit_peak.sh all  # or: fit | loyo
+   squeue -u $USER
+   ```
+   - `fit` writes four files per model. `fit_peak_<model>.rds` is the fit. `loo_peak_<model>.rds` is its PSIS-LOO object. `peak_draws_<model>.rds` holds the peak week of every site-year in every posterior draw. `fill_<model>.rds` is the filled weekly series: E[log(CEW + 1)] for every week of every trapped site-year (mean, sd and `PEAK_FILL_DRAWS` draws), which step 2 uses. Each LOYO fold also saves its held-out year's fills. The job prints divergences, the tree-depth share, the largest R-hat and the smallest bulk ESS. Log: `logs/peak_fit_<model>.<jobid>.out`.
+   - `loyo` is a 13-task array per model, one task per held-out year (task 0 = 2008). Each task writes `loyo/<model>/loyo_peak_<year>.rds` with scores, weekly predictions and predicted peaks. The fit itself isn't kept unless `PEAK_SAVE_LOYO_FIT=1`. Logs: `logs/peak_loyo_<model>.<arrayid>_<task>.out`. To rerun one year, use `sbatch --array=<task> ...` with the same settings and `PEAK_MODEL`, or rerun `./hpc/submit_peak.sh loyo`.
+   - CmdStan's draws are kept in `stan_csv/<model>/`. A fold's draws are deleted once its predictions are saved.
+
+4. **Copy the outputs back [Mac].** The `loo_peak_*`, `peak_draws_*` and `fill_*` files and `loyo/` are all the analysis needs. The fits are large, so copy them only if you want them.
+   ```bash
+   rsync -av "<unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/{loo_peak_*,peak_draws_*,fill_*,loyo}" \
+     ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/
+   ```
+   `cew_peak_granger.R` summarises the peaks of `PEAK_MODEL` (default `site`). After reading the comparison in section 3, set `Sys.setenv(PEAK_MODEL = "zone_year")` before sourcing it if that model is preferred.
+   Then run `cew_peak_granger.R` and the step-1/2 section of `CEW_JIPM_Figures.R`. Its Granger sections (4–8) don't need these files, so they can run before the jobs finish.
+
 ## Quick reference
 
 | Task | Command |

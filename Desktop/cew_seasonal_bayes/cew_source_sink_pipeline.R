@@ -345,3 +345,4 @@ ggplot(oos_wk, aes(woy, value, colour = series, linetype = series == "observed")
   geom_line() + facet_wrap(~ zone) + guides(linetype = "none") +
   labs(x = "ISO week (2020)", y = "Mean log(CEW + 1)", colour = NULL) +
   theme_minimal()
+

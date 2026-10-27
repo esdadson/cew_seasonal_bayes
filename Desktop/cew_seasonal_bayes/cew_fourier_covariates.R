@@ -138,14 +138,18 @@ dat6_brms <- dat6 %>% ungroup() %>%
     other = as.numeric(scale(Other_Crops_pland)),
     non_crop = as.numeric(scale(Non_Crop_pland)),
     gdd = as.numeric(scale(gdd)),
-    EVI_filled = as.numeric(scale(EVI_filled))
+    EVI_filled = as.numeric(scale(EVI_filled)),
+    s1 = as.numeric(scale(s1)),
+    s2 = as.numeric(scale(s2)),
+    c1 = as.numeric(scale(c1)),
+    c2 = as.numeric(scale(c2))
   )
 
 formula_gp <- bf(
-  log_CEW ~ 
+  log_CEW ~ 0 + zone_fac + zone_fac(s1 + c1 + s2 + c2) + 
     EVI_filled + gdd + 
     corn + cotton + soybeans + tobacco + peanuts + other + 
-    (0 + s1 + c1 + s2 + c2 || zone_fac) + 
+    (0 + s1 + c1 + s2 + c2 || location2) + 
     gp(lon_scaled, lat_scaled, cov = "exponential") + 
     (1 | year) + 
     (1 | trap_type),
@@ -153,11 +157,11 @@ formula_gp <- bf(
 )
 
 priors_gp <- c(
-  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 5), class = "Intercept"),
   prior(normal(0, 1), class = "b"),
   prior(student_t(3, 0, 2.5), class = "sd"),
   prior(exponential(1), class = "sdgp"),
-  prior(inv_gamma(5, 5), class = "lscale")
+  prior(inv_gamma(5, 5), class = "lscale", coef = "gplon_scaledlat_scaled")
 )
 
 fit_gp2.1 <- brm(
