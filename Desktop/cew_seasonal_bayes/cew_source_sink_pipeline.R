@@ -41,8 +41,29 @@ source("cew_stage1_data.R")
 # 5. Stage 1: seasonal model of cew_fourier_covariates.R (fit_gp2.1) ------------
 #    Model and priors: cew_stage1_data.R. Fit on the HPC (hpc/submit_stage1.sh,
 #    see hpc/README.md) and copy fit1_gp21_train.rds here; this only reads it.
+#
+#    Test run with an existing fit instead (e.g. while the HPC fit runs):
+#      Sys.setenv(CEW_STAGE1_FIT = "../CEW/brms_fit/fit_gp2.1.rds")
+#    fit_gp2.1 was fit to 2008-2020 with covariates standardised on all its
+#    rows, so the data are rescaled the same way and section 10 is in-sample
+#    (2020 was fit): this checks the pipeline, it does not evaluate it. Its gdd
+#    is GDD on the trap date (here: weekly sum) and its EVI used the old site
+#    ids. Outputs get the prefix test_ so they don't overwrite the real ones.
 # =============================================================================
-fit1 <- fit_stage1(d_train)
+stage1_test <- Sys.getenv("CEW_STAGE1_FIT")
+out <- function(f) if (nzchar(stage1_test)) paste0("test_", f) else f
+if (nzchar(stage1_test)) {
+  message("TEST RUN with ", stage1_test, ": 2020 is in-sample, section 10 is not out-of-sample")
+  # fits made with the rstan backend: rstan's Rcpp modules fail to load when
+  # readRDS() pulls rstan in mid-read, so load it first
+  if (requireNamespace("rstan", quietly = TRUE)) invisible(loadNamespace("rstan"))
+  fit1 <- readRDS(stage1_test)
+  scale_my <- make_scaler(d_all %>% filter(observed), my_vars)
+  d_all    <- scale_my(d_all)
+  d_train  <- d_all %>% filter(observed, train)
+} else {
+  fit1 <- fit_stage1(d_train)
+}
 hz <- c("s1", "c1", "s2", "c2")
 
 # ---- Peak timing -------------------------------------------------------------
@@ -72,7 +93,14 @@ pk_zone$at_edge                                            # check before report
 #    would pass sink information into the source field.
 #    2020 rows are predicted from the training fit (no new-level terms).
 # =============================================================================
-re_clim <- ~ (0 + s1 + c1 + s2 + c2 || zone_fac) + (1 | trap_type)   # all but year
+# All of fit1's group-level terms but the year effect: zone curves and trap type
+# (read from the fit, so it also works for a test fit without trap type)
+re_clim <- local({
+  f    <- paste(deparse(fit1$formula$formula), collapse = " ")
+  bars <- regmatches(f, gregexpr("\\([^()]*\\|[^()]*\\)", f))[[1]]
+  reformulate(grep("\\|\\s*year(_f)?\\s*\\)$", bars, value = TRUE, invert = TRUE))
+})
+re_clim
 set.seed(42)
 ids <- sample(ndraws(fit1), 200)
 lin <- function(nd) colMeans(posterior_linpred(fit1, newdata = nd, re_formula = re_clim,
@@ -97,7 +125,7 @@ pred_grid <- d_all %>%
             pred_hi   = apply(pp_grid, 2, quantile, 0.95),
             pred_CEW  = exp(pred_mean) - 1) %>%
   arrange(location2, year, woy)
-write.csv(pred_grid, "stage1_prediction_grid.csv", row.names = FALSE)
+write.csv(pred_grid, out("stage1_prediction_grid.csv"), row.names = FALSE)
 rm(pp_grid)
 
 # Quick first look (Lawton-style): yearly zone mean anomalies, training years
@@ -181,9 +209,9 @@ f2_base <- bf(as.formula(paste(
 # Southern booms; report both.
 pri2 <- c(prior(normal(0, 0.5), class = "b"), prior(student_t(3, 0, 1), class = "sd"))
 fit2 <- brm(f2, data = obs_b_tr, family = gaussian(), chains = 4, cores = 4,
-            prior = pri2, seed = 42, file = "fit2_sink_train", file_refit = "on_change")
+            prior = pri2, seed = 42, file = out("fit2_sink_train"), file_refit = "on_change")
 fit2_base <- brm(f2_base, data = obs_b_tr, family = gaussian(), chains = 4, cores = 4,
-                 prior = pri2, seed = 42, file = "fit2_base_train", file_refit = "on_change")
+                 prior = pri2, seed = 42, file = out("fit2_base_train"), file_refit = "on_change")
 
 # Lag profile beta_k = Blag %*% theta, per draw and sink zone
 fx2 <- as_draws_df(fit2)
@@ -202,13 +230,13 @@ obs_b_tr$Pstar <- rowSums(as.matrix(obs_b_tr[, Qs]) * t(theta_hat[, as.character
 fit2_season <- brm(bf(anom ~ zone_fac + gdd_wk_anom + agdd_wk_anom + evi_anom +
                         s(woy, by = Pstar, k = 6) + (1 | year_f) + (1 | location2)),
                    data = obs_b_tr, family = gaussian(), chains = 4, cores = 4, seed = 42,
-                   file = "fit2_season", file_refit = "on_change")
+                   file = out("fit2_season"), file_refit = "on_change")
 
 # Where on the sink side: site-specific sensitivity to source pressure
 fit2_site <- brm(bf(anom ~ zone_fac + gdd_wk_anom + agdd_wk_anom + evi_anom + Pstar +
                       (1 + Pstar || location2) + (1 | year_f)),
                  data = obs_b_tr, family = gaussian(), chains = 4, cores = 4, seed = 42,
-                 file = "fit2_site", file_refit = "on_change")
+                 file = out("fit2_site"), file_refit = "on_change")
 
 # =============================================================================
 # 8. Falsification tests (training years) ---------------------------------------

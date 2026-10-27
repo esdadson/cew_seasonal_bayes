@@ -20,7 +20,7 @@ export STAGE1_WARMUP=${STAGE1_WARMUP:-19000}
 export STAGE1_THIN=${STAGE1_THIN:-4}
 
 # --- Resources: replace with the values printed by the dry run / seff ----------
-STAGE1_TIME=4-00:00:00; STAGE1_MEM=16G; STAGE1_QOS=normal   # qos long: up to 10 days
+STAGE1_TIME=7-20:04:00   STAGE1_QOS=long   STAGE1_MEM=9G   # qos long: up to 10 days
 # ------------------------------------------------------------------------------
 
 mkdir -p logs
