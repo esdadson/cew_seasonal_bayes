@@ -9,7 +9,7 @@
 #SBATCH --output=logs/stage1_dryrun.%j.out
 # Dry run of the stage-1 fit, on a compute node: compiles the model and runs
 # one short chain on the full training data. Submit from the project directory
-# (cew_seasonal_bayes/Desktop/cew_seasonal_bayes), with the full-run settings
+# (cew_seasonal_bayes), with the full-run settings
 # you intend to use so the suggestion matches (defaults: fit_stage1()):
 #   STAGE1_CHAINS=4 STAGE1_ITER=20000 STAGE1_WARMUP=19000 sbatch hpc/stage1_dryrun.sbatch
 # Limits are generous so the measurement can't be cut short. When the job

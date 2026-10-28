@@ -1,4 +1,4 @@
-# Running the covariate extraction and the stage-1 fit on Hazel
+# Running the covariate extraction and the step-1 models on Hazel
 
 Steps 1–9 extract Daymet weather and CDL landscape metrics for every trap site (sections 2–3 of `cew_source_sink_pipeline.R`) as Slurm jobs on Hazel. The output files are then read by the pipeline. Step 10 fits the stage-1 seasonal model (section 5).
 
@@ -14,7 +14,7 @@ R and all packages come from a conda environment (step 3). Hazel's R module is a
 
 ```bash
 cd ~/Desktop/cew_seasonal_bayes
-git add Desktop/cew_seasonal_bayes
+git add -A
 git commit -m "HPC covariate extraction"
 git push
 ```
@@ -31,7 +31,7 @@ Approve the two-factor prompt. Idle sessions are disconnected automatically.
 
 ```bash
 git clone https://github.com/esdadson/cew_seasonal_bayes.git
-cd cew_seasonal_bayes/Desktop/cew_seasonal_bayes
+cd cew_seasonal_bayes
 ```
 
 If the repo is private, use a GitHub personal access token as the password.
@@ -101,7 +101,7 @@ The choice changes weather anomalies. With per-year sites, each site's climatolo
 
 ## 5. Dry run [submitted from Hazel, runs on a compute node]
 
-Run from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`:
+Run from `cew_seasonal_bayes`:
 
 ```bash
 sbatch hpc/dryrun.sbatch            # "Submitted batch job <jobid>"
@@ -172,8 +172,8 @@ To fix and resubmit:
 If you skipped step 4, copy the outputs back:
 
 ```bash
-rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/covariates/ \
-  ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/covariates/
+rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/covariates/ \
+  ~/Desktop/cew_seasonal_bayes/covariates/
 ```
 
 If you used research storage, first run this in R:
@@ -190,7 +190,7 @@ The pipeline stops if its site table doesn't match the one the HPC jobs used. If
 
 `cew_stage1_hpc.R` fits the stage-1 seasonal model (your fit_gp2.1 model, in `cew_stage1_data.R`) on 2008–2019. The pipeline then only reads the saved fit. The exact GP makes each iteration slow: on the laptop, 3,100 iterations took about 13 hours.
 
-Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
+Run everything from `cew_seasonal_bayes`.
 
 1. **Inputs.** The job rebuilds the modelling data, so it needs the covariates from steps 7–8 in `$CEW_OUT` (or `covariates/`). It also reads these files under `$CEW_DATA/Original/pest-occurrence/corn_earworm/`:
    - `Lawton_etal_data.csv` (in the dryad folder)
@@ -231,49 +231,82 @@ Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`.
 
 6. **Copy the fit back [Mac].**
    ```bash
-   rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/fit1_gp21_train.rds \
-     ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/
+   rsync -av <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/fit1_gp21_train.rds \
+     ~/Desktop/cew_seasonal_bayes/
    ```
    The pipeline reads it in section 5 and never refits it (`file_refit = "never"`). Delete the file to refit, for example after changing the data or the model.
 
-## 11. Fit the step-1 peak model [Hazel]
+## 11. Step 1: fit and compare the weekly models [Hazel]
 
-`cew_peak_hpc.R` fits the weekly peak-timing model in `cew_peak_model.R` and runs its leave-one-year-out (LOYO) refits. `cew_peak_granger.R` then only reads their outputs. The model uses an approximate GP (exponential kernel) and fits all years 2008–2020. Each fold of the LOYO array holds out one year.
+Step 1 lives in `step1/` and step 2 in `step2/`. The original scripts at the top level are unchanged.
 
-There are two candidate models, chosen with `PEAK_MODEL`. `site` has zone curves, site curve offsets, the GP and a year level. `zone_year` adds zone-year curve shifts. `submit_peak.sh` runs both (`PEAK_MODELS="site zone_year"`). `cew_peak_granger.R` section 3 compares them with `loo_compare` (PSIS-LOO) and on the LOYO folds. The sampler uses `adapt_delta = 0.95` and `max_treedepth = 12` (`peak_control` in `cew_peak_model.R`). Set the run length with `PEAK_ITER` and `PEAK_WARMUP`.
+| File | What it does |
+| --- | --- |
+| `step1/step1_data.R` | Builds the modelling data from `covariates/`: weekly counts plus a prediction grid of weeks 1–52 for every monitored site-year. |
+| `step1/step1_models.R` | Defines the three candidate models, their priors and sampler settings, and the functions for the 52-week predictions and peak weeks. |
+| `step1/step1_hpc.R` | Slurm driver with three modes: `dryrun`, `fit` and `compare`. |
+| `step2/step2_granger.R`, `step2/step2_functions.R` | Spatial clustering and Granger causality. Run on your laptop from `results/step1/`. |
 
-Run everything from `cew_seasonal_bayes/Desktop/cew_seasonal_bayes`. The inputs are the same as in step 10.1.
+The three models are nested. Each one adds a term to the one before. `compare` ranks them with `loo_compare`.
+- `fixed`: zone, year and trap type as fixed effects, plus weekly EVI, GDD and crop shares.
+- `spatial`: `fixed` plus a spatial error term. This is an approximate GP with an exponential kernel on km coordinates.
+- `fourier`: `spatial` plus Fourier seasonal curves. Each zone has one curve shared over space, and each site gets its own offset from it.
 
-1. **Dry run.** It compiles the model and runs one short chain (150 warmup + 50 sampling iterations) with the full run's threads per chain:
+Sampling defaults: 4 chains × 20 000 iterations, with 10 000 warmup and thin = 40. That gives 1000 posterior draws. The sampler uses `adapt_delta = 0.95` and `max_treedepth = 12`. Change these with `STEP1_ITER`, `STEP1_WARMUP` and `STEP1_THIN` in `hpc/submit_step1.sh`. Thinning makes the saved draws smaller, but every iteration still has to run, so it doesn't shorten the job.
+
+Run everything from `cew_seasonal_bayes`. The inputs are the same as in step 10.1: `covariates/` and the data root.
+
+1. **Dry run each model.** Each dry run compiles the model and runs one short chain (150 warmup + 50 sampling iterations) with the full run's threads per chain:
    ```bash
-   PEAK_MODEL=zone_year PEAK_CHAINS=4 PEAK_ITER=4000 PEAK_WARMUP=2000 PEAK_THREADS=4 sbatch hpc/peak_dryrun.sbatch
+   STEP1_MODEL=fourier STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
+   STEP1_MODEL=spatial STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
+   STEP1_MODEL=fixed   STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
    ```
-   `--cpus-per-task` in `hpc/peak_dryrun.sbatch` must be at least `PEAK_THREADS`. When it's finished:
+   `--cpus-per-task` in `hpc/step1_dryrun.sbatch` must be at least `STEP1_THREADS`. When a dry run finishes:
    ```bash
-   tail -25 logs/peak_dryrun.<jobid>.out
+   tail -25 logs/step1_dryrun.<jobid>.out
    seff <jobid>
    ```
-   The log shows seconds per gradient, leapfrog steps, the share of iterations at max tree depth, the hours per chain, and suggested `PEAK_TIME`, `PEAK_QOS` and `PEAK_MEM`.
+   The log shows:
+   - the data step's time
+   - seconds per gradient and leapfrog steps per iteration
+   - the share of iterations at max tree depth
+   - hours per chain
+   - suggested `STEP1_TIME`, `STEP1_QOS` and `STEP1_MEM`
 
-2. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_peak.sh`. Each job requests `PEAK_CHAINS × PEAK_THREADS` cores.
+2. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_step1.sh`. `STEP1_TIME` applies to every model, and `TIME_<model>` overrides it for one model. For example, use `TIME_fourier=8-00:00:00` with `STEP1_QOS=long`. Each fit job requests `STEP1_CHAINS × STEP1_THREADS` cores.
 
-3. **Full fit and LOYO.**
+3. **Fit, compare, predict.**
    ```bash
-   chmod +x hpc/submit_peak.sh                           # once, if git didn't keep the execute bit
-   MAIL_USER=<unityID>@ncsu.edu ./hpc/submit_peak.sh all  # or: fit | loyo
+   chmod +x hpc/submit_step1.sh                            # once, if git didn't keep the execute bit
+   MAIL_USER=<unityID>@ncsu.edu ./hpc/submit_step1.sh all  # or: fit | compare
    squeue -u $USER
    ```
-   - `fit` writes four files per model. `fit_peak_<model>.rds` is the fit. `loo_peak_<model>.rds` is its PSIS-LOO object. `peak_draws_<model>.rds` holds the peak week of every site-year in every posterior draw. `fill_<model>.rds` is the filled weekly series: E[log(CEW + 1)] for every week of every trapped site-year (mean, sd and `PEAK_FILL_DRAWS` draws), which step 2 uses. Each LOYO fold also saves its held-out year's fills. The job prints divergences, the tree-depth share, the largest R-hat and the smallest bulk ESS. Log: `logs/peak_fit_<model>.<jobid>.out`.
-   - `loyo` is a 13-task array per model, one task per held-out year (task 0 = 2008). Each task writes `loyo/<model>/loyo_peak_<year>.rds` with scores, weekly predictions and predicted peaks. The fit itself isn't kept unless `PEAK_SAVE_LOYO_FIT=1`. Logs: `logs/peak_loyo_<model>.<arrayid>_<task>.out`. To rerun one year, use `sbatch --array=<task> ...` with the same settings and `PEAK_MODEL`, or rerun `./hpc/submit_peak.sh loyo`.
-   - CmdStan's draws are kept in `stan_csv/<model>/`. A fold's draws are deleted once its predictions are saved.
+   `all` submits one fit job per model. It also submits a `compare` job, which starts only after every fit has succeeded.
+   - **`fit`** writes `results/step1/fit_<model>.rds` (the brms fit) and `loo_<model>.rds` (its PSIS-LOO). It prints the summary, divergences, the share of iterations at max tree depth, the largest R-hat, and the smallest bulk and tail ESS. CmdStan's draws are kept in `results/step1/stan_csv/<model>/`. Log: `logs/step1_fit_<model>.<jobid>.out`.
+   - **`compare`** prints Pareto-k tables and `loo_compare`, and writes `loo_compare.csv`. It selects the model with the best ELPD. If the difference is within about 2 `se_diff`, the simpler model is just as good: set `STEP1_SELECT=<model> ./hpc/submit_step1.sh compare` to use it instead. It then predicts the selected model over weeks 1–52 of every monitored site-year and writes:
+     - `predictions.rds`: posterior mean, sd and 95% interval of E[log(CEW + 1)] for every row, plus `STEP1_PRED_DRAWS` (default 100) draws for step 2
+     - `peak_draws.rds`: the peak week of every site-year in all 1000 draws
+     - `peak_site_year.csv`, `peak_zone_year.csv`, `peak_zone_delay.csv` and `peak_site.csv`
+     - `pred_zone_week.csv`: zone mean predicted curve per year
+     - `model_data.rds`: the modelling data, for step 2
 
-4. **Copy the outputs back [Mac].** The `loo_peak_*`, `peak_draws_*` and `fill_*` files and `loyo/` are all the analysis needs. The fits are large, so copy them only if you want them.
+     Log: `logs/step1_compare.<jobid>.out`.
+   - Stan can't resume a chain, so a job that runs out of time loses everything. That's why the requested time is padded.
+
+4. **Copy the results back [Mac].** Step 2 and the figures need everything in `results/step1/` except the fits and `stan_csv/`:
    ```bash
-   rsync -av "<unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/Desktop/cew_seasonal_bayes/{loo_peak_*,peak_draws_*,fill_*,loyo}" \
-     ~/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/
+   rsync -av --exclude 'fit_*.rds' --exclude 'stan_csv' \
+     <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/results/step1 \
+     ~/Desktop/cew_seasonal_bayes/results/
    ```
-   `cew_peak_granger.R` summarises the peaks of `PEAK_MODEL` (default `site`). After reading the comparison in section 3, set `Sys.setenv(PEAK_MODEL = "zone_year")` before sourcing it if that model is preferred.
-   Then run `cew_peak_granger.R` and the step-1/2 section of `CEW_JIPM_Figures.R`. Its Granger sections (4–8) don't need these files, so they can run before the jobs finish.
+
+5. **Step 2 [Mac].** From the project directory, run `step2/step2_granger.R`. It does three things:
+   - clusters the step-1 weekly populations (observed weeks plus predictions for unsampled weeks) into regions within each zone
+   - tests Granger causality from Southern to Transitional and Northern regions at lags of 1–8 weeks, scored in-sample, leave-one-year-out and against a year-permutation null
+   - compares the most predictive lags with the step-1 peak delays
+
+   It writes `results/step2/`. Then run the "Step 1 and step 2 figures" section at the end of `CEW_JIPM_Figures.R`.
 
 ## Quick reference
 

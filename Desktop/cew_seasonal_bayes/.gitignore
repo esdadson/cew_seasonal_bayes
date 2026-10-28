@@ -1,0 +1,3 @@
+# Step 1/2 outputs: large binaries stay on Hazel / the laptop (CSVs are small and may be committed)
+results/**/*.rds
+results/**/stan_csv/

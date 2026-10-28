@@ -1,16 +1,24 @@
 # =============================================================================
-# cew_granger_functions.R
-# Helpers for step 2 of cew_peak_granger.R: regional clustering, regional
-# weekly series, and Granger-causality tests from Southern to Transitional/
+# step2/step2_functions.R
+# Helpers for step2/step2_granger.R: regional clustering, regional weekly
+# series, and Granger-causality tests from Southern to Transitional/
 # Northern regions - in-sample F tests, leave-one-year-out (LOYO) out-of-
-# sample gain and a year-permutation null.
-# Uses fourier_matrix() from cew_source_sink_functions.R; cluster (for
-# silhouettes) ships with R.
+# sample gain and a year-permutation null. cluster (for silhouettes) ships
+# with R.
 # =============================================================================
 
 library(dplyr)
 
 zone_code <- c(`2` = "S", `1` = "T", `0` = "N")
+
+# Fourier basis matrix of week (period = 52), columns s1, c1, s2, c2, ...
+# (as in cew_source_sink_functions.R)
+fourier_matrix <- function(weeks, H = 2, period = 52) {
+  B <- do.call(cbind, lapply(seq_len(H), function(h)
+    cbind(sin(2 * pi * h * weeks / period), cos(2 * pi * h * weeks / period))))
+  colnames(B) <- as.vector(rbind(paste0("s", 1:H), paste0("c", 1:H)))
+  B
+}
 
 # -----------------------------------------------------------------------------
 # Regions: Ward hierarchical clustering of each zone's sites.

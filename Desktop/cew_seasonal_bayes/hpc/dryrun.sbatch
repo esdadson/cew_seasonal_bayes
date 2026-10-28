@@ -7,7 +7,7 @@
 #SBATCH --mem=32G
 #SBATCH --output=logs/dryrun.%j.out
 # Dry run of the covariate extraction, on a compute node. Submit from the
-# project directory (cew_seasonal_bayes/Desktop/cew_seasonal_bayes):
+# project directory (cew_seasonal_bayes):
 #   sbatch hpc/dryrun.sbatch
 # Limits are generous so the measurement can't be cut short. When the job
 # ends: tail -30 logs/dryrun.<jobid>.out (suggested settings) and seff <jobid>.
