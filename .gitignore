@@ -1,14 +1,11 @@
+# R / RStudio
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
-.Rproj.user
+# OS clutter
+.DS_Store
+desktop.ini
+# Step 1/2 outputs: large binaries stay on Hazel / the laptop (CSVs are small and may be committed)
+results/**/*.rds
+results/**/stan_csv/
