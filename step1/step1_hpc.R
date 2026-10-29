@@ -14,11 +14,13 @@
 #                                       # the selected one over weeks 1-52 + peaks
 #
 # Environment:
-#   STEP1_MODEL     fixed | spatial | fourier (dryrun, fit; default fourier)
+#   STEP1_MODEL     fixed | spatial | fourier | simple (dryrun, fit; default fourier)
 #   STEP1_CHAINS, STEP1_ITER, STEP1_WARMUP, STEP1_THIN   (defaults: fit_step1(),
-#                   4 x 20000 iterations, 10000 warmup, thin 40 -> 1000 draws)
+#                   4 x 15000 iterations, 7500 warmup, thin 30 -> 1000 draws)
 #   STEP1_THREADS   threads per chain (the job needs STEP1_CHAINS x STEP1_THREADS cores)
 #   STEP1_GP_K      GP basis functions per dimension (step1_models.R)
+#   STEP1_FROM_CSV  1 = fit mode rebuilds fit_<model>.rds from the run's saved
+#                   CmdStan CSVs (results/step1/stan_csv/<model>/), no sampling
 #   STEP1_SELECT    model to predict in compare mode (default: the best ELPD)
 #   STEP1_PRED_DRAWS  posterior draws of the 52-week predictions kept for step 2 (100)
 #   DRY_WARMUP, DRY_SAMPLING   dry-run chain length (default 150 + 50)
@@ -84,10 +86,11 @@ if (mode == "dryrun") {
   h_obs <- full$iter * steps_obs * sec_grad / 3600
   h_max <- full$iter * (2^max_td - 1) * sec_grad / 3600
   h_post <- 1                                 # + data, compile, loo
-  # padded: adaptation in the dry run is short; if most iterations still hit
-  # max tree depth, size for the worst case
+  # padded: adaptation in the dry run is short (the full spatial run took
+  # 1.9 x h_obs); if most iterations still hit max tree depth, size for the
+  # worst case
   at_max <- mean(dg$treedepth__[!in_w] >= max_td)
-  h_req <- (if (at_max > 0.5) 1.15 * h_max else 1.5 * h_obs) + h_post
+  h_req <- (if (at_max > 0.5) 1.15 * h_max else 2.5 * h_obs) + h_post
   qos   <- if (h_req <= 4 * 24) "normal" else if (h_req <= 10 * 24) "long" else NA
   fmt_t <- function(h) { m <- ceiling(min(h, 240) * 60)
     sprintf("%d-%02d:%02d:00", m %/% 1440, (m %% 1440) %/% 60, m %% 60) }
@@ -130,11 +133,28 @@ if (mode == "dryrun") {
                   Sys.getenv("SLURM_CPUS_PER_TASK", "?")))
   print(step1_formula(model))
   # CmdStan's CSVs are kept in results/step1/stan_csv/<model>/: if R fails
-  # after sampling, read them with brms/cmdstanr instead of refitting
+  # after sampling, STEP1_FROM_CSV=1 rebuilds the fit from them instead of refitting
   dir.create(pf$csv, recursive = TRUE, showWarnings = FALSE)
   t0 <- Sys.time()
-  fit <- fit_step1(model, chains = full$chains, iter = full$iter, warmup = full$warmup, thin = full$thin,
-                   threads = full$threads, file_refit = "always", output_dir = pf$csv, refresh = 500)
+  if (Sys.getenv("STEP1_FROM_CSV") == "1") {
+    # newest run only: one run's chains share the id after the last "-"
+    csvs <- list.files(pf$csv, pattern = "[.]csv$", full.names = TRUE)
+    if (!length(csvs)) stop("No CmdStan CSVs in ", pf$csv)
+    run  <- sub(".*-", "", tools::file_path_sans_ext(basename(csvs)))
+    csvs <- csvs[run == run[which.max(file.mtime(csvs))]]
+    message("Rebuilding the fit from ", length(csvs), " CSVs:\n  ", paste(basename(csvs), collapse = "\n  "))
+    if (length(csvs) != full$chains) stop("Expected ", full$chains, " chains, found ", length(csvs))
+    fit <- fit_step1(model, chains = full$chains, iter = full$iter, warmup = full$warmup, thin = full$thin,
+                     threads = full$threads, file = NULL, empty = TRUE)
+    fit$fit <- brms:::read_csv_as_stanfit(csvs, exclude = brms:::exclude_pars(fit))
+    fit <- rename_pars(fit)
+    n_exp <- full$chains * (full$iter - full$warmup) %/% full$thin
+    if (ndraws(fit) != n_exp) stop("The CSVs hold ", ndraws(fit), " draws, expected ", n_exp, " (a chain did not finish)")
+    saveRDS(fit, paste0(pf$fit, ".rds"))
+  } else {
+    fit <- fit_step1(model, chains = full$chains, iter = full$iter, warmup = full$warmup, thin = full$thin,
+                     threads = full$threads, file_refit = "always", output_dir = pf$csv, refresh = 500)
+  }
   message(sprintf("Sampling + saving: %.1f h. Saved %s.rds", mins(t0) / 60, pf$fit))
   print(summary(fit))
   np <- nuts_params(fit)

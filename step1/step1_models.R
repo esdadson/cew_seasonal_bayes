@@ -17,6 +17,10 @@
 #            F_1..4 = the 2-harmonic Fourier basis of week (orthogonalised,
 #            step1_data.R section 5); b_z = zone seasonal curve (shared over
 #            space), v_i = site curve offset (site-specific; || = uncorrelated)
+#  simple  : (not nested in the others; from cew_fourier_covariates.R)
+#            mu = a + x_itw' beta + sum_k F_k(w) b_zk + f(x_i, y_i) + a_t + trap
+#            zone curves as uncorrelated zone-level slopes, year and trap type
+#            as random intercepts, no zone intercepts or site curves
 #  No site x year terms: thousands of coefficients from ~15 weeks each would
 #  overparameterise the model.
 # =============================================================================
@@ -41,12 +45,18 @@ terms_fixed   <- c("0 + zone_fac + year_f + trap_type",
                    "EVI_filled + gdd + corn + cotton + soybeans + tobacco + peanuts + other")
 terms_spatial <- c(terms_fixed, gp_term)
 terms_fourier <- c(terms_spatial, "zone_fac:(f1 + f2 + f3 + f4)", "(0 + f1 + f2 + f3 + f4 || location2)")
-step1_terms <- list(fixed = terms_fixed, spatial = terms_spatial, fourier = terms_fourier)
+# fit_gp's formula with f1-f4 for s1, c1, s2, c2 (the same curves; section 5
+# of step1_data.R) and the approximate GP for its exact one
+terms_simple  <- c("EVI_filled + gdd + corn + cotton + soybeans + tobacco + peanuts + other",
+                   "(0 + f1 + f2 + f3 + f4 || zone_fac)", gp_term, "(1 | year_f) + (1 | trap_type)")
+step1_terms <- list(fixed = terms_fixed, spatial = terms_spatial, fourier = terms_fourier,
+                    simple = terms_simple)
 
 step1_formula <- function(model)
   bf(as.formula(paste("log_CEW ~", paste(step1_terms[[model]], collapse = " + "))))
 has_gp <- function(model) gp_term %in% step1_terms[[model]]
 has_sd <- function(model) any(grepl("|", step1_terms[[model]], fixed = TRUE))
+has_zone <- function(model) any(startsWith(step1_terms[[model]], "0 + zone_fac"))
 
 # brms drops rows with any NA in a formula variable; fail here, naming the
 # column, rather than at compile time with "all observations removed"
@@ -61,11 +71,10 @@ if (length(na_vars)) stop("NA in model variables of the observed rows: ", paste(
 # brms rejects priors on classes a model doesn't have, so each model gets
 # only its own.
 step1_priors <- function(model) {
-  p <- c(prior(normal(0, 1), class = "b"),
-         prior(normal(0, 3), class = "b", coef = "zone_fac0"),
-         prior(normal(0, 3), class = "b", coef = "zone_fac1"),
-         prior(normal(0, 3), class = "b", coef = "zone_fac2"),
-         prior(student_t(3, 0, 1), class = "sigma"))
+  p <- c(prior(normal(0, 1), class = "b"), prior(student_t(3, 0, 1), class = "sigma"))
+  if (has_zone(model)) p <- c(p, prior(normal(0, 3), class = "b", coef = "zone_fac0"),
+                              prior(normal(0, 3), class = "b", coef = "zone_fac1"),
+                              prior(normal(0, 3), class = "b", coef = "zone_fac2"))
   if (has_gp(model)) p <- c(p, prior(exponential(1), class = "sdgp"),
                             prior(inv_gamma(4, 0.5), class = "lscale", coef = "gpx_kmy_km"))
   if (has_sd(model)) p <- c(p, prior(student_t(3, 0, 1), class = "sd"))
@@ -80,7 +89,7 @@ step1_files <- function(model)
 
 # =============================================================================
 # Sampler -------------------------------------------------------------------------
-#   20000 iterations per chain, the first 10000 warmup, every 40th draw kept:
+#   15000 iterations per chain, the first 7500 warmup, every 30th draw kept:
 #   4 chains x 250 = 1000 posterior draws. Thinning keeps the saved fit, loo
 #   and predictions small; the long chains are for convergence. Override with
 #   STEP1_ITER / STEP1_WARMUP / STEP1_THIN (step1/step1_hpc.R).
@@ -89,7 +98,7 @@ step1_files <- function(model)
 #   fewer iterations hit the cap, but each can take longer.
 # =============================================================================
 step1_control <- list(adapt_delta = 0.95, max_treedepth = 12)
-fit_step1 <- function(model, data = d_obs, chains = 4, iter = 20000, warmup = 10000, thin = 40,
+fit_step1 <- function(model, data = d_obs, chains = 4, iter = 15000, warmup = 7500, thin = 30,
                       threads = 1, file = step1_files(model)$fit, file_refit = "never", ...) {
   brm(step1_formula(model), data = droplevels(data), family = gaussian(), prior = step1_priors(model),
       chains = chains, cores = chains, iter = iter, warmup = warmup, thin = thin,

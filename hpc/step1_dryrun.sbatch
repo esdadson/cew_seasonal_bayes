@@ -12,7 +12,7 @@
 # (cew_seasonal_bayes) with the full-run settings
 # you intend to use; --cpus-per-task must be >= STEP1_THREADS:
 #   STEP1_MODEL=fourier STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
-# (and again with STEP1_MODEL=spatial, fixed). When it ends:
+# (and again with STEP1_MODEL=spatial, fixed, simple). When it ends:
 #   tail -25 logs/step1_dryrun.<jobid>.out (suggested settings) and seff <jobid>.
 export CEW_DATA=${CEW_DATA:-/rs1/researchers/c/cmjone25/Data}
 export CEW_OUT=${CEW_OUT:-$SLURM_SUBMIT_DIR/covariates}
