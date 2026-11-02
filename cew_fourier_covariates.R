@@ -11,7 +11,7 @@ library(tidybayes)
 
 options(brms.backend = "cmdstanr")
 
-dat <- read.csv("/Volumes/cmjone25/Data/Original/pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")
+dat <- read.csv("Z:/Data/Original/pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")
 dat = dat %>% group_by(longitude, latitude) %>% mutate(location2 = cur_group_id())
 dat$location3 = paste(dat$location, dat$location2, sep = "_")
 
@@ -156,6 +156,17 @@ formula_gp <- bf(
   family = gaussian()
 )
 
+formula_gp <- bf(
+  log_CEW ~
+    EVI_filled + gdd + 
+    corn + cotton + soybeans + tobacco + peanuts + other + 
+    (0 + s1 + c1 + s2 + c2 || zone_fac) + 
+    gp(lon_scaled, lat_scaled, cov = "exponential") + 
+    (1 | year) + 
+    (1 | trap_type),
+  family = gaussian()
+)
+
 priors_gp <- c(
   prior(normal(0, 5), class = "Intercept"),
   prior(normal(0, 1), class = "b"),
@@ -178,7 +189,7 @@ fit_gp2.1 <- brm(
   cores = 2,
   seed = 42,
   save_pars = save_pars(all = TRUE),
-  file = "/Users/evandadson/Desktop/cew_seasonal_bayes/Desktop/cew_seasonal_bayes/brms_fits/fit_gp2.1"
+  file = "C:/Users/edadson/Desktop/CEW/brms_fit/fit_gp2.1.rds"
 )
 
 summary(fit_gp2.1)

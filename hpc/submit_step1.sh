@@ -3,10 +3,10 @@
 # This script only calls sbatch, so it is fine on a login node; all R code
 # runs on compute nodes through hpc/step1.sbatch.
 # Dry run first (its own job script):  STEP1_MODEL=fourier sbatch hpc/step1_dryrun.sbatch
-#   ./hpc/submit_step1.sh fit       # one job per model in STEP1_MODELS
-#                                   #   -> results/step1/fit_<model>.rds, loo_<model>.rds
-#   ./hpc/submit_step1.sh compare   # loo_compare + 52-week predictions and peaks of the
-#                                   #   selected model (after the fits have finished)
+#   ./hpc/submit_step1.sh fit       # one job per model in STEP1_MODELS (fit to 2008-2019)
+#                                   #   -> results/step1/fit_, loo_, metrics_<model>.rds
+#   ./hpc/submit_step1.sh compare   # comparison table + 52-week predictions and peaks of
+#                                   #   the selected model (after the fits have finished)
 #   ./hpc/submit_step1.sh all       # fit, then compare once every fit has succeeded
 #   STEP1_MODELS=fixed ./hpc/submit_step1.sh fit        # one model only
 # Watch: squeue -u $USER     Progress: tail logs/step1_*.out     Usage after: seff <jobid>
@@ -18,7 +18,8 @@ export CEW_DATA=${CEW_DATA:-/rs1/researchers/c/cmjone25/Data}
 export CEW_OUT=${CEW_OUT:-$PWD/covariates}
 PARTITION=${PARTITION:-compute}
 MAIL_USER=${MAIL_USER:-}                    # e.g. MAIL_USER=<unityID>@ncsu.edu: email at end/failure
-STEP1_MODELS=${STEP1_MODELS:-"fixed spatial fourier"}
+STEP1_MODELS=${STEP1_MODELS:-"fixed spatial fourier fourier_site"}
+export STEP1_HOLDOUT=${STEP1_HOLDOUT:-2020}  # out-of-sample validation year (none = fit all years)
 
 # --- Sampler settings (the dry run must use the same ones) --------------------
 export STEP1_CHAINS=${STEP1_CHAINS:-4}      # chains run in parallel
@@ -31,12 +32,14 @@ CPUS=$((STEP1_CHAINS * STEP1_THREADS))
 # --- Resources: replace with the values printed by the dry run / seff ----------
 # One setting for every model unless overridden per model below; the GP
 # models are the slow ones.
-# QOS: normal up to 4 days, long up to 10. Times below are for 20000
-# iterations (spatial took ~22 h; dry run said 18 h): replace them with the
-# 15000-iteration dry runs.
-STEP1_TIME=${STEP1_TIME:-1-06:00:00}   STEP1_QOS=${STEP1_QOS:-normal}   STEP1_MEM=${STEP1_MEM:-16G}
-TIME_fixed=${TIME_fixed:-0-01:04:00}   TIME_fourier=${TIME_fourier:-6-00:00:00}   QOS_fourier=${QOS_fourier:-long}
-# compare: load one fit, loo tables, 52-week predictions (~1-3 h)
+# QOS: normal up to 4 days, long up to 10 (per model: QOS_<model>=long).
+# PLACEHOLDERS until the dry runs of the current models (year is now a random
+# intercept, which makes even 'fixed' slower per iteration than before).
+# Time includes ~1 h for loo, R^2 and the held-out-year metrics.
+STEP1_TIME=${STEP1_TIME:-1-00:00:00}   STEP1_QOS=${STEP1_QOS:-normal}   STEP1_MEM=${STEP1_MEM:-16G}
+TIME_fixed=${TIME_fixed:-0-06:00:00}   TIME_fourier=${TIME_fourier:-3-12:00:00}
+TIME_fourier_site=${TIME_fourier_site:-3-23:00:00}
+# compare: loo tables, comparison table, 52-week predictions of one model (~1-3 h)
 COMPARE_TIME=${COMPARE_TIME:-08:00:00}   COMPARE_MEM=${COMPARE_MEM:-48G}
 # ------------------------------------------------------------------------------
 

@@ -243,24 +243,35 @@ Step 1 lives in `step1/` and step 2 in `step2/`. The original scripts at the top
 | File | What it does |
 | --- | --- |
 | `step1/step1_data.R` | Builds the modelling data from `covariates/`: weekly counts plus a prediction grid of weeks 1–52 for every monitored site-year. |
-| `step1/step1_models.R` | Defines the three candidate models, their priors and sampler settings, and the functions for the 52-week predictions and peak weeks. |
+| `step1/step1_models.R` | Defines the four candidate models, their priors and sampler settings, the fit and held-out-year metrics, and the functions for the 52-week predictions and peak weeks. |
 | `step1/step1_hpc.R` | Slurm driver with three modes: `dryrun`, `fit` and `compare`. |
-| `step2/step2_granger.R`, `step2/step2_functions.R` | Spatial clustering and Granger causality. Run on your laptop from `results/step1/`. |
+| `step2/step2_granger.R`, `step2/step2_functions.R` | Regional clustering, Granger causality and the two DAGs. Run on your laptop from `results/step1/`. |
 
-The three models are nested. Each one adds a term to the one before. `compare` ranks them with `loo_compare`.
-- `fixed`: zone, year and trap type as fixed effects, plus weekly EVI, GDD and crop shares.
-- `spatial`: `fixed` plus a spatial error term. This is an approximate GP with an exponential kernel on km coordinates.
-- `fourier`: `spatial` plus Fourier seasonal curves. Each zone has one curve shared over space, and each site gets its own offset from it.
+Every model is fit to **2008–2019**. **2020 is held out** and predicted out of sample (`STEP1_HOLDOUT`; `none` fits every year). Year is a random intercept, so 2020's year effect is drawn from the fitted year-to-year spread.
 
-Sampling defaults: 4 chains × 20 000 iterations, with 10 000 warmup and thin = 40. That gives 1000 posterior draws. The sampler uses `adapt_delta = 0.95` and `max_treedepth = 12`. Change these with `STEP1_ITER`, `STEP1_WARMUP` and `STEP1_THIN` in `hpc/submit_step1.sh`. Thinning makes the saved draws smaller, but every iteration still has to run, so it doesn't shorten the job.
+The four models are nested, and each adds a block to the one before:
+- `fixed`: zone and trap type, weekly EVI and GDD, crop shares, and a year random intercept.
+- `spatial`: `fixed` plus a spatial error term, an approximate GP with an exponential kernel on km coordinates.
+- `fourier`: `spatial` plus a Fourier seasonal curve shared by all sites, with uncorrelated zone deviations `(0 + f1 + f2 + f3 + f4 || zone_fac)`.
+- `fourier_site`: `fourier` plus site curve offsets `(0 + f1 + f2 + f3 + f4 || location2)`. Every 2020 site was also trapped in 2008–2019, so its offsets are estimated.
+
+`compare` builds `model_comparison.csv` with these columns:
+- PSIS-LOO: `elpd_loo`, `p_loo`, and `loo_compare`'s `elpd_diff` / `se_diff`
+- R²: Bayesian R² and LOO R², each with a 95% interval
+- MAE and RMSE: in-sample and LOO
+- 2020 (held out): `elpd_test`, MAE, RMSE, R², and the coverage of the 90% predictive interval
+
+It **selects the simplest model within 2 SE of the best ELPD**, so each block must earn its parameters.
+
+Sampling defaults: 4 chains × 15 000 iterations, with 7 500 warmup and thin = 30. That gives 1000 posterior draws. The sampler uses `adapt_delta = 0.95` and `max_treedepth = 12`. Change these with `STEP1_ITER`, `STEP1_WARMUP` and `STEP1_THIN` in `hpc/submit_step1.sh`. Thinning makes the saved draws smaller, but every iteration still has to run, so it doesn't shorten the job.
 
 Run everything from `cew_seasonal_bayes`. The inputs are the same as in step 10.1: `covariates/` and the data root.
 
-1. **Dry run each model.** Each dry run compiles the model and runs one short chain (150 warmup + 50 sampling iterations) with the full run's threads per chain:
+1. **Dry run each model.** Each dry run compiles the model and runs one chain of 500 warmup + 100 sampling iterations with the full run's threads per chain. With fewer iterations the sampler isn't adapted yet, and the timing is wrong. The fourier models take about 1–2 h at most.
    ```bash
-   STEP1_MODEL=fourier STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
-   STEP1_MODEL=spatial STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
-   STEP1_MODEL=fixed   STEP1_THREADS=4 sbatch hpc/step1_dryrun.sbatch
+   for m in fixed spatial fourier fourier_site; do
+     STEP1_MODEL=$m STEP1_THREADS=4 sbatch --job-name=s1_dry_$m hpc/step1_dryrun.sbatch
+   done
    ```
    `--cpus-per-task` in `hpc/step1_dryrun.sbatch` must be at least `STEP1_THREADS`. When a dry run finishes:
    ```bash
@@ -271,10 +282,11 @@ Run everything from `cew_seasonal_bayes`. The inputs are the same as in step 10.
    - the data step's time
    - seconds per gradient and leapfrog steps per iteration
    - the share of iterations at max tree depth
+   - the scale parameters (`sdgp`, `lscale`, the `sd_` terms, `sigma`) with R-hat and ESS. If `sdgp` is far above about 3, or `lscale` sits at the bottom of its prior, the GP can't represent the site-to-site variation, and that model will crawl.
    - hours per chain
    - suggested `STEP1_TIME`, `STEP1_QOS` and `STEP1_MEM`
 
-2. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_step1.sh`. `STEP1_TIME` applies to every model, and `TIME_<model>` overrides it for one model. For example, use `TIME_fourier=8-00:00:00` with `STEP1_QOS=long`. Each fit job requests `STEP1_CHAINS × STEP1_THREADS` cores.
+2. **Set resources.** Paste the suggested values into the `Resources` block of `hpc/submit_step1.sh`. `STEP1_TIME` applies to every model, and `TIME_<model>` overrides it for one model (e.g. `TIME_fourier_site`). `QOS_<model>=long` is needed above 4 days, up to the 10-day maximum. Each fit job requests `STEP1_CHAINS × STEP1_THREADS` cores.
 
 3. **Fit, compare, predict.**
    ```bash
@@ -283,8 +295,19 @@ Run everything from `cew_seasonal_bayes`. The inputs are the same as in step 10.
    squeue -u $USER
    ```
    `all` submits one fit job per model. It also submits a `compare` job, which starts only after every fit has succeeded.
-   - **`fit`** writes `results/step1/fit_<model>.rds` (the brms fit) and `loo_<model>.rds` (its PSIS-LOO). It prints the summary, divergences, the share of iterations at max tree depth, the largest R-hat, and the smallest bulk and tail ESS. CmdStan's draws are kept in `results/step1/stan_csv/<model>/`. Log: `logs/step1_fit_<model>.<jobid>.out`.
-   - **`compare`** prints Pareto-k tables and `loo_compare`, and writes `loo_compare.csv`. It selects the model with the best ELPD. If the difference is within about 2 `se_diff`, the simpler model is just as good: set `STEP1_SELECT=<model> ./hpc/submit_step1.sh compare` to use it instead. It then predicts the selected model over weeks 1–52 of every monitored site-year and writes:
+   - **`fit`** writes these files:
+     - `results/step1/fit_<model>.rds`: the brms fit
+     - `loo_<model>.rds`: its PSIS-LOO
+     - `metrics_<model>.rds`: R², MAE and the 2020 validation
+
+     It prints the summary, divergences, the share of iterations at max tree depth, the largest R-hat, the smallest bulk and tail ESS, and the metrics.
+
+     CmdStan's draws are kept in `results/step1/stan_csv/<model>/`. If R fails after sampling, `STEP1_FROM_CSV=1 STEP1_MODELS=<model> ./hpc/submit_step1.sh fit` rebuilds the fit from them without sampling again. Log: `logs/step1_fit_<model>.<jobid>.out`.
+   - **`compare`** prints the Pareto-k tables, `loo_compare` and the comparison table, and selects a model (`STEP1_SELECT=<model> ./hpc/submit_step1.sh compare` overrides the choice). It writes:
+     - `model_comparison.csv`
+     - `holdout_zone_week.csv` and `holdout_rows.csv`: every model's 2020 predictions
+
+     It then predicts the selected model over weeks 1–52 of every monitored site-year (2020 out of sample) and writes:
      - `predictions.rds`: posterior mean, sd and 95% interval of E[log(CEW + 1)] for every row, plus `STEP1_PRED_DRAWS` (default 100) draws for step 2
      - `peak_draws.rds`: the peak week of every site-year in all 1000 draws
      - `peak_site_year.csv`, `peak_zone_year.csv`, `peak_zone_delay.csv` and `peak_site.csv`
@@ -301,10 +324,13 @@ Run everything from `cew_seasonal_bayes`. The inputs are the same as in step 10.
      ~/Desktop/cew_seasonal_bayes/results/
    ```
 
-5. **Step 2 [Mac].** From the project directory, run `step2/step2_granger.R`. It does three things:
-   - clusters the step-1 weekly populations (observed weeks plus predictions for unsampled weeks) into regions within each zone
-   - tests Granger causality from Southern to Transitional and Northern regions at lags of 1–8 weeks, scored in-sample, leave-one-year-out and against a year-permutation null
-   - compares the most predictive lags with the step-1 peak delays
+5. **Step 2 [Mac].** From the project directory, run `step2/step2_granger.R`. It takes about a minute up to tens of minutes, depending on the number of regions, and does four things:
+   - **Clustering:** groups sites into regions within each zone, using space plus each site's mean weekly curve over 2008–2019.
+   - **Zone level:** tests Southern lags of 1–8 weeks against the Transitional and Northern zones, with leads and the reverse direction as falsification checks.
+   - **Region level:** finds which Southern regions predict which Transitional and Northern regions, and at which lag, then compares those lags with distance and the step-1 peak delays.
+   - **DAGs:** tests South → North directly against South → Transitional → North, using conditional Granger tests (`S -> N | T` against `T -> N | S`) at zone level and for each Northern region.
+
+   Every regression is fit to 2008–2019. Significance comes from a year-permutation null (Benjamini–Hochberg across region pairs), and 2020 gives the out-of-sample gain.
 
    It writes `results/step2/`. Then run the "Step 1 and step 2 figures" section at the end of `CEW_JIPM_Figures.R`.
 

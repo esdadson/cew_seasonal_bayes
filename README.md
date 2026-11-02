@@ -7,9 +7,9 @@ cew_seasonal_bayes/
 ├── cew_covariates_hpc.R        covariate extraction (Daymet, CDL) -> covariates/   [Hazel]
 ├── step1/                      Step 1: weekly spatial Bayesian model of log(CEW + 1)
 │   ├── step1_data.R              modelling data from covariates/ + weeks 1-52 prediction grid
-│   ├── step1_models.R            fixed | spatial (GP) | fourier models, priors, predictions, peaks
+│   ├── step1_models.R            fixed | spatial | fourier | fourier_site, metrics, predictions, peaks
 │   └── step1_hpc.R               Slurm driver: dryrun | fit | compare            [Hazel]
-├── step2/                      Step 2: spatial clustering + Granger causality, S -> T / N
+├── step2/                      Step 2: regions, Granger causality S -> T / N, DAGs
 │   ├── step2_functions.R
 │   └── step2_granger.R                                                          [laptop]
 ├── results/step1/, results/step2/   outputs of steps 1 and 2 (read by the figures)
@@ -22,8 +22,9 @@ cew_seasonal_bayes/
 Run order (details in hpc/README.md, steps 1-9 and 11):
 1. Covariates on Hazel: `./hpc/submit_covariates.sh`
 2. Step 1 on Hazel: dry runs (`sbatch hpc/step1_dryrun.sbatch`), then `./hpc/submit_step1.sh all`
-   (fits the three models, compares them with `loo_compare`, predicts the selected one over
-   weeks 1-52 of every monitored site-year and extracts peak weeks)
+   (fits the four nested models to 2008-2019, compares them with `loo_compare`, R^2 and MAE,
+   validates them on the held-out year 2020, predicts the selected one over weeks 1-52 of
+   every monitored site-year and extracts peak weeks)
 3. Copy `results/step1/` back; run `step2/step2_granger.R`
 4. Figures: the "Step 1 and step 2 figures" section at the end of `CEW_JIPM_Figures.R`
 

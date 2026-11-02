@@ -2,42 +2,114 @@
 # 2. Get map boundaries for countries and Great Lakes
 
 # Figure 1
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(cowplot)
+
 us_states <- map_data("state")
 canada_prov <- map_data("world", region = c("Canada", "Mexico"))
 lakes <- map_data("lakes")
 
-# 3. Create the usmap-styled plot
-p = ggplot() +
-  # Draw Canada base layer (light aesthetic)
-  geom_polygon(data = canada_prov, aes(x = long, y = lat, group = group), 
-               fill = "#f9f9f9", color = "#9c9c9c", linewidth = 0.3) +
-  # Draw US States layer 
-  geom_polygon(data = us_states, aes(x = long, y = lat, group = group), 
-               fill = "#f9f9f9", color = "#9c9c9c", linewidth = 0.3) +
-  # Overlay the Great Lakes (using a light blue fill to punch them out)
-  geom_polygon(data = lakes, aes(x = long, y = lat, group = group), 
-               fill = "#cbdbee", color = "#9c9c9c", linewidth = 0.3) +
-  # Plot points directly 
-  geom_point(
-    data = loc_year_min5[loc_year_min5$nyr < 3,], 
-    aes(x = longitude, y = latitude), shape = 4, size = 1
-  ) + geom_point(data = loc_year_min5[loc_year_min5$nyr >= 3,], 
-                 aes(x = longitude, y = latitude, color = nyr), size = 2.5, 
-                 alpha = 0.8
-  ) + scale_color_viridis_c(name = "Years \nSampled", limits = c(1,31)) + 
-  # Set the usmap-style projection (Lambert Conformal Conic) 
-  # and frame it cleanly to exclude Alaska/Hawaii/Northern Canada
-  coord_sf(crs = st_crs(4269), xlim = c(-125, -66), ylim = c(24, 52)) + 
-  # Apply clean minimalist theme settings
-  theme_void() +
-  theme(
-    panel.background = element_rect(fill = NA, color = NA), # Blue ocean background
-    plot.title = element_text(face = "bold", size = 14, margin = margin(b=10)),
-    plot.margin = margin(20, 20, 20, 20)
-  )
+# Sites of the step-1 analysis, from the same code that builds the model data
+# (step1/step1_data.R: 2008-2020, longitude >= -105, site-years with >= 5
+# sampled weeks at sites with >= 3 such years). Creates counts_raw, sites,
+# keep_ly (site-years with >= 5 weeks), d_obs and root.
+if (!exists("d_obs")) local({
+  owd = setwd("C:/Users/edadson/Desktop/cew_seasonal_bayes"); on.exit(setwd(owd))
+  source("step1/step1_data.R")
+})
+
+# Full Lawton et al. (2022) dataset (incl. sites west of 105W)
+lawton = read.csv(file.path(root, "pest-occurrence/corn_earworm/doi_10_5061_dryad_m0cfxpp5x__v20221206/Lawton_etal_data.csv"))
+
+# Years sampled = years 2008-2020 with >= 5 sampled weeks; selected = in the fit
+site_nyr = keep_ly %>% count(location2, name = "nyr")
+fig1_sites = lawton %>%
+  distinct(longitude, latitude) %>%
+  left_join(sites %>% select(longitude, latitude, location2), by = c("longitude", "latitude")) %>%
+  left_join(site_nyr, by = "location2") %>%
+  mutate(nyr = coalesce(nyr, 0L),
+         selected = location2 %in% d_obs$location2)
+
+# JIPM print size: measure the double-column width on a recent JIPM PDF.
+# Text >= 7 pt and lines 0.25-1 pt at this size (OUP artwork guidance);
+# ggplot linewidth is in mm, so 0.25-1 pt = linewidth 0.12-0.47.
+fig_width = 6.8                                   # in, double column
+fig_font = "Arial"
+yrs_scale = scale_color_viridis_c(name = "Years\nsampled", limits = c(3, 13), breaks = c(3, 5, 7, 9, 11, 13),
+                                  end = 0.9, aesthetics = c("color", "fill"),   # no pale yellow
+                                  na.value = "gray70")
+
+fig1_map = ggplot() +
+  geom_polygon(data = canada_prov, aes(x = long, y = lat, group = group),
+               fill = "#f9f9f9", color = "#9c9c9c", linewidth = 0.15) +
+  geom_polygon(data = us_states, aes(x = long, y = lat, group = group),
+               fill = "#f9f9f9", color = "#9c9c9c", linewidth = 0.15) +
+  geom_polygon(data = lakes, aes(x = long, y = lat, group = group),
+               fill = "#cbdbee", color = "#9c9c9c", linewidth = 0.15) +
+  # Unselected sites gray crosses (shape as well as color), selected on top
+  geom_point(data = filter(fig1_sites, !selected), aes(x = longitude, y = latitude, shape = "Not selected"),
+             color = "gray55", size = 0.6, stroke = 0.3) +
+  geom_point(data = filter(fig1_sites, selected) %>% arrange(nyr),
+             aes(x = longitude, y = latitude, color = nyr, shape = "Selected"), size = 1.2, alpha = 0.9) +
+  scale_shape_manual(values = c("Selected" = 16, "Not selected" = 4), name = NULL) +
+  yrs_scale +
+  guides(shape = guide_legend(order = 2, override.aes = list(size = 1.5, color = c("gray55", "black"))),
+         color = guide_colorbar(order = 1, barheight = unit(25, "mm"), barwidth = unit(3, "mm"))) +
+  coord_sf(crs = st_crs(4269), xlim = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
+  theme_void(base_size = 8, base_family = fig_font) +
+  theme(legend.text = element_text(size = 7), legend.title = element_text(size = 8),
+        plot.margin = margin(0, 0, 0, 0))
+
+# Years sampled per site (sites with >= 1 qualifying year); bars < 3 years gray
+fig1_hist = ggplot(fig1_sites %>% filter(nyr > 0) %>% count(nyr),
+                   aes(x = nyr, y = n, fill = ifelse(nyr >= 3, nyr, NA))) +
+  annotate("rect", xmin = 0.5, xmax = 2.5, ymin = -Inf, ymax = Inf, fill = "gray93") +
+  annotate("text", x = 1.5, y = Inf, label = "Not selected", vjust = 1.3,
+           size = 7 / .pt, family = fig_font, color = "gray30") +
+  geom_col(width = 0.85) +
+  geom_text(aes(label = n), vjust = -0.4, size = 7 / .pt, family = fig_font) +
+  yrs_scale +
+  scale_x_continuous(breaks = 1:13, expand = expansion(add = 0.3)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
+  labs(x = "Years sampled (2008\u20132020)", y = "Sites") +
+  theme_classic(base_size = 8, base_family = fig_font) +
+  theme(legend.position = "none", axis.text = element_text(size = 7, color = "black"),
+        axis.title.y = element_text(margin = margin(r = 4)),
+        axis.line = element_line(linewidth = 0.25), axis.ticks = element_line(linewidth = 0.25),
+        plot.margin = margin(12, 5.5, 5.5, 12))
+
+# Data-selection flowchart; numbers computed from the data so they match the fit
+fmt = function(x) format(x, big.mark = ",")
+fig1_flow_txt = c(
+  sprintf("Full Lawton et al. (2022) dataset\nn = %s, sites = %s",
+          fmt(nrow(lawton)), fmt(nrow(distinct(lawton, longitude, latitude)))),
+  sprintf("Analysis sites: 2008\u20132020, east of 105\u00b0W,\n\u2265 5 weeks sampled per year, \u2265 3 such years\nn = %s, site-years = %s, sites = %s",
+          fmt(nrow(d_obs)), fmt(n_distinct(d_obs$loc_year)), fmt(n_distinct(d_obs$location2))))
+fig1_flow = ggplot() +
+  annotate("label", x = 0.5, y = c(0.8, 0.2), label = fig1_flow_txt, size = 7 / .pt,
+           family = fig_font, lineheight = 0.95, linewidth = 0.4,
+           label.padding = unit(2, "mm"), label.r = unit(1.5, "mm")) +
+  annotate("segment", x = 0.5, xend = 0.5, y = 0.66, yend = 0.37, linewidth = 0.4,
+           arrow = arrow(length = unit(1.5, "mm"), type = "closed")) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+  theme_void()
+
+fig1 = plot_grid(
+  plot_grid(fig1_flow, fig1_hist, ncol = 2, rel_widths = c(1, 1.15), labels = c("a", "b"),
+            label_size = 9, label_fontfamily = fig_font),
+  fig1_map, ncol = 1, rel_heights = c(1, 1.45), labels = c("", "c"),
+  label_size = 9, label_fontfamily = fig_font)
+
+# Vector PDF (fonts embedded by cairo) + 600 dpi TIFF (combination art)
+ggsave("C:/Users/edadson/Desktop/CEW/fig1.pdf", fig1, width = fig_width, height = 5.4,
+       units = "in", device = cairo_pdf, bg = "white")
+ggsave("C:/Users/edadson/Desktop/CEW/fig1.tif", fig1, width = fig_width, height = 5.4,
+       units = "in", dpi = 600, device = ragg::agg_tiff, compression = "lzw", bg = "white")
 
 # Figure 2
-ggplot() +
+p = ggplot() +
   # Use tidyterra's specialized geometry for categorical rasters
   geom_spatvector(data = us_states, fill = "#f9f9f9") +
   geom_spatraster(data = ag_land_rast, aes(fill = class)) +
@@ -295,10 +367,12 @@ ggsave(filename = "C:/Users/edadson/Desktop/CEW/posterior_credible_intervals_leg
 
 # =============================================================================
 # Step 1 and step 2 figures
-#   Step 1 (results/step1/, from step1/step1_hpc.R compare): model comparison,
+#   Step 1 (results/step1/, from step1/step1_hpc.R compare): model comparison
+#     (LOO, R^2, MAE), out-of-sample prediction of the held-out year 2020,
 #     predicted weekly curves (weeks 1-52) and peak week.
-#   Step 2 (results/step2/, from step2/step2_granger.R): regions and
-#     Southern -> Transitional/Northern Granger causality and lag times.
+#   Step 2 (results/step2/, from step2/step2_granger.R): regions, Southern ->
+#     Transitional/Northern Granger causality and lag times, the held-out
+#     year, and the two DAGs (South -> North vs South -> Transitional -> North).
 # The base map layers (us_states, canada_prov, lakes) are those of Figure 1 above.
 # =============================================================================
 library(dplyr)
@@ -355,23 +429,71 @@ if (file.exists(file.path(step2_dir, "granger_results.rds"))) {
 # -----------------------------------------------------------------------------
 # Step 1
 # -----------------------------------------------------------------------------
-if (file.exists(file.path(step1_dir, "loo_compare.csv"))) {
-  # Model comparison: ELPD difference from the best model (PSIS-LOO, +/- 2 SE)
-  lc = read.csv(file.path(step1_dir, "loo_compare.csv"))
-  if ("elpd_diff" %in% names(lc)) {
-    lc = lc %>%
-      mutate(model = factor(model, levels = c("fixed", "spatial", "fourier"),
-                            labels = c("Fixed effects", "+ Spatial GP", "+ Fourier seasonality")))
-    p_loo = ggplot(lc, aes(x = elpd_diff, y = model)) +
-      geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
-      geom_pointrange(aes(xmin = elpd_diff - 2 * se_diff, xmax = elpd_diff + 2 * se_diff),
-                      color = "deepskyblue4") +
-      labs(x = "ELPD difference from the best model (PSIS-LOO, \u00b1 2 SE)", y = NULL) +
-      theme_minimal()
+model_levels = c("fixed", "spatial", "fourier", "fourier_site")
+model_labels = c("Fixed effects", "+ Spatial GP", "+ Seasonal curves (zone)", "+ Site curves")
 
-    ggsave(filename = file.path(fig_dir, "step1_loo_compare.png"), p_loo, width = 7,
-           height = 3, units = 'in', dpi = 300)
-  }
+if (file.exists(file.path(step1_dir, "model_comparison.csv"))) {
+  # Model comparison: fit to 2008-2019 (PSIS-LOO) and prediction of the
+  # held-out year. ELPD difference from the best model (+/- 2 SE); LOO R^2
+  # (95% CrI); MAE of the LOO and of the held-out predictions; held-out R^2.
+  # Filled = the selected model (simplest within 2 SE of the best ELPD).
+  cmp = read.csv(file.path(step1_dir, "model_comparison.csv")) %>%
+    mutate(model = factor(model, levels = model_levels, labels = model_labels))
+  ho_lab = function(x) paste0(x, " (", if ("n_test" %in% names(cmp)) "2020" else "n/a", ")")
+  cmp_long = bind_rows(
+    cmp %>% transmute(model, selected, metric = "ELPD difference (LOO)", est = elpd_diff,
+                      lo = elpd_diff - 2 * se_diff, hi = elpd_diff + 2 * se_diff),
+    cmp %>% transmute(model, selected, metric = "R\u00b2 (LOO)", est = loo_R2, lo = loo_R2_lo, hi = loo_R2_hi),
+    cmp %>% transmute(model, selected, metric = "MAE (LOO)", est = mae_loo, lo = NA, hi = NA),
+    if ("R2_test" %in% names(cmp)) cmp %>% transmute(model, selected, metric = ho_lab("R\u00b2"), est = R2_test,
+                                                     lo = NA, hi = NA),
+    if ("mae_test" %in% names(cmp)) cmp %>% transmute(model, selected, metric = ho_lab("MAE"), est = mae_test,
+                                                      lo = NA, hi = NA)) %>%
+    mutate(metric = factor(metric, levels = unique(metric)))
+
+  p_cmp = ggplot(cmp_long, aes(x = est, y = model)) +
+    geom_errorbar(aes(xmin = lo, xmax = hi), width = 0.2, orientation = "y", color = "deepskyblue4",
+                  na.rm = TRUE) +
+    geom_point(aes(shape = selected), size = 2.4, color = "deepskyblue4") +
+    scale_shape_manual(values = c("TRUE" = 16, "FALSE" = 1), labels = c("TRUE" = "Yes", "FALSE" = "No"),
+                       name = "Selected") +
+    facet_wrap(~ metric, scales = "free_x", nrow = 1) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal() +
+    theme(strip.text = element_text(face = "bold"))
+
+  ggsave(filename = file.path(fig_dir, "step1_model_comparison.png"), p_cmp, width = 13,
+         height = 3.2, units = 'in', dpi = 300)
+}
+
+if (file.exists(file.path(step1_dir, "holdout_zone_week.csv"))) {
+  # Out-of-sample validation: the held-out year's zone weekly mean of the
+  # trapped sites, observed (points) vs each model's prediction from
+  # 2008-2019 (line, 95% CrI of the mean; the year effect is drawn, unknown)
+  hzw = read.csv(file.path(step1_dir, "holdout_zone_week.csv")) %>%
+    mutate(model = factor(model, levels = model_levels, labels = model_labels),
+           zone = factor(zone_30y, levels = c(2, 1, 0), labels = zone_labels[c("2", "1", "0")]))
+  ho_txt = cmp %>% transmute(model, label = sprintf("MAE %.2f\nR\u00b2 %.2f", mae_test, R2_test),
+                             zone = factor(levels(hzw$zone)[1], levels = levels(hzw$zone)))   # top row
+
+  p_ho = ggplot(hzw, aes(x = woy)) +
+    geom_ribbon(aes(ymin = lo, ymax = hi, fill = zone), alpha = 0.25) +
+    geom_line(aes(y = med, color = zone), linewidth = 0.7) +
+    geom_point(aes(y = obs_mean, size = n_sites), shape = 21, fill = "white", color = "black", stroke = 0.4) +
+    geom_text(data = ho_txt, aes(x = -Inf, y = Inf, label = label), hjust = -0.1, vjust = 1.2, size = 2.8) +
+    scale_color_manual(values = setNames(zone_colors[c("2", "1", "0")], zone_labels[c("2", "1", "0")]),
+                       name = "Overwintering \nzone") +
+    scale_fill_manual(values = setNames(zone_colors[c("2", "1", "0")], zone_labels[c("2", "1", "0")]),
+                      name = "Overwintering \nzone") +
+    scale_size_area(max_size = 2.5, name = "Sites \ntrapped") +
+    facet_grid(zone ~ model) +
+    labs(x = "Week of Year", y = paste0("Mean log(CEW + 1), ", hzw$year[1]),
+         title = paste0("Out-of-sample prediction of ", hzw$year[1], " (models fit to the other years)")) +
+    theme_minimal() +
+    theme(strip.text = element_text(face = "bold"))
+
+  ggsave(filename = file.path(fig_dir, "step1_holdout_prediction.png"), p_ho, width = 13,
+         height = 7.5, units = 'in', dpi = 300)
 }
 
 if (file.exists(file.path(step1_dir, "pred_zone_week.csv"))) {
@@ -462,9 +584,11 @@ if (!is.null(g2)) {
          height = 4, units = 'in', dpi = 300)
 
   # Granger link map: arrows from each Southern region to the sink regions it
-  # improves out of sample (gain > 0); bold = permutation test p < 0.05 (BH)
+  # is positively associated with at its best lag (color = share of the
+  # sink's remaining variation explained, 2008-2019); bold = permutation
+  # test p < 0.05 (BH)
   links = pairs %>%
-    filter(best_gain > 0) %>%
+    filter(coef_sum > 0) %>%
     mutate(test = ifelse(link, "p < 0.05 (BH)", "n.s."),
            # stop arrows short of the sink centroid so the label stays readable
            xend = longitude_src + 0.85 * (longitude_snk - longitude_src),
@@ -481,7 +605,7 @@ if (!is.null(g2)) {
                  arrow = arrow(length = unit(0.1, "inches"), type = "closed")) +
     geom_label(data = reg_info, aes(x = longitude, y = latitude, label = region),
                size = 2.4, label.padding = unit(0.1, "lines"), fill = "white", alpha = 0.8) +
-    scale_color_viridis_c(name = "Out-of-sample \ngain (%)", option = "viridis", end = 0.85) +
+    scale_color_viridis_c(name = "Variation \nexplained (%)", option = "viridis", end = 0.85) +
     scale_linewidth_manual(values = c("p < 0.05 (BH)" = 1.1, "n.s." = 0.4), name = "Permutation \ntest") +
     scale_alpha_manual(values = c("p < 0.05 (BH)" = 0.95, "n.s." = 0.6), name = "Permutation \ntest") +
     scale_fill_manual(values = zone_colors, labels = zone_labels, name = "Overwintering \nzone") +
@@ -493,9 +617,9 @@ if (!is.null(g2)) {
 
   # Lag map: each sink region filled by the lag (weeks) at which its strongest
   # Southern source best predicts it; faded = not significant; unfilled = no
-  # Southern lag improves out-of-sample prediction
+  # positive Southern association
   best_src = pairs %>%
-    filter(best_gain > 0) %>%
+    filter(coef_sum > 0) %>%
     group_by(sink) %>%
     slice_max(best_gain, n = 1, with_ties = FALSE) %>%
     ungroup()
@@ -526,19 +650,18 @@ if (!is.null(g2)) {
   ggsave(filename = file.path(fig_dir, "granger_best_lag.png"), p_lag, width = 9,
          height = 6, units = 'in', dpi = 300)
 
-  # Lag profiles: out-of-sample gain by Southern lag, one panel per sink region
+  # Lag profiles: variation explained by each Southern lag (2008-2019), one
+  # panel per sink region
   lag_prof = g2$granger_reg %>%
-    mutate(lag = as.integer(sub("lag", "", setting)),
-           sig = !is.na(p_perm) & p_perm < 0.05)
+    mutate(sig = !is.na(p_perm) & p_perm < 0.05)
 
-  p_prof = ggplot(lag_prof, aes(x = lag, y = 100 * loyo_gain, color = source)) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  p_prof = ggplot(lag_prof, aes(x = lag, y = 100 * gain, color = source)) +
     geom_line() +
     geom_point(aes(shape = sig), size = 1.8) +
     scale_shape_manual(values = c("TRUE" = 16, "FALSE" = 1), name = "Permutation \np < 0.05") +
     scale_x_continuous(breaks = 1:8) +
     facet_wrap(~ sink) +
-    labs(x = "Southern lag (weeks)", y = "Out-of-sample gain (%)", color = "Southern \nregion") +
+    labs(x = "Southern lag (weeks)", y = "Variation explained (%)", color = "Southern \nregion") +
     theme_minimal()
 
   ggsave(filename = file.path(fig_dir, "granger_lag_profiles.png"), p_prof, width = 10,
@@ -546,58 +669,76 @@ if (!is.null(g2)) {
 
   # Zone level: lags (forward and reverse) and leads (falsification)
   gz = g2$granger_zone %>%
-    filter(grepl("^(lag|lead)", setting)) %>%
-    mutate(k = as.integer(sub("lag|lead", "", setting)) * ifelse(grepl("^lag", setting), 1, -1),
-           pair = factor(paste(source, "->", sink),
+    mutate(pair = factor(paste(source, "->", sink),
                          levels = c("S -> T", "S -> N", "T -> S", "N -> S")),
            sig = !is.na(p_perm) & p_perm < 0.05)
 
-  p_zone = ggplot(gz, aes(x = k, y = 100 * loyo_gain, color = direction)) +
+  p_zone = ggplot(gz, aes(x = lag, y = 100 * gain, color = direction)) +
     geom_vline(xintercept = 0, color = "gray70") +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
     geom_line() +
     geom_point(aes(shape = sig), size = 2) +
     scale_shape_manual(values = c("TRUE" = 16, "FALSE" = 1), name = "Permutation \np < 0.05") +
     scale_color_manual(values = c(forward = "deepskyblue4", reverse = "gray50"), name = "") +
     scale_x_continuous(breaks = -3:8) +
     facet_wrap(~ pair, ncol = 2) +
-    labs(x = "Lag of source zone (weeks; negative = lead)", y = "Out-of-sample gain (%)") +
+    labs(x = "Lag of source zone (weeks; negative = lead)", y = "Variation explained (%), 2008-2019") +
     theme_minimal()
 
   ggsave(filename = file.path(fig_dir, "granger_zone_lags.png"), p_zone, width = 8,
          height = 6, units = 'in', dpi = 300)
 
-  # Leave-one-year-out predictions at each sink zone's best Southern lag:
-  # observed vs own-history-only vs + Southern lag (one week ahead, held-out year)
-  best_set = g2$granger_zone %>%
-    filter(direction == "forward", grepl("^lag", setting)) %>%
-    group_by(sink) %>%
-    slice_max(loyo_gain, n = 1, with_ties = FALSE) %>%
-    ungroup() %>%
-    select(source, sink, setting)
+  # Held-out year at each sink zone's best Southern lag: observed vs own
+  # history only vs + Southern lag (one week ahead), fit to 2008-2019
   oos = g2$granger_pred_zone %>%
-    semi_join(best_set, by = c("source", "sink", "setting")) %>%
-    transmute(sink, setting, year, woy,
+    semi_join(g2$best_zone %>% select(source, sink, setting), by = c("source", "sink", "setting")) %>%
+    left_join(g2$best_zone %>% select(sink, gain_holdout), by = "sink") %>%
+    transmute(sink = factor(sink, levels = c("T", "N"), labels = c("Transitional zone", "Northern zone")),
+              panel = sprintf("%s (Southern lag %s wk; out-of-sample gain %.0f%%)", sink,
+                              sub("lag", "", setting), 100 * gain_holdout),
+              year, woy,
               `Observed` = clim + anom,
               `Own history` = clim + pred_R,
               `+ Southern lag` = clim + pred_U) %>%
     pivot_longer(c(`Observed`, `Own history`, `+ Southern lag`), names_to = "series") %>%
     mutate(series = factor(series, levels = c("Observed", "Own history", "+ Southern lag")))
 
-  for (s in unique(oos$sink)) {
-    d = oos %>% filter(sink == s)
-    p_oos = ggplot(d, aes(x = woy, y = value, color = series)) +
+  if (nrow(oos)) {
+    p_oos = ggplot(oos, aes(x = woy, y = value, color = series)) +
       geom_line() +
+      geom_point(data = oos %>% filter(series == "Observed"), size = 1) +
       scale_color_manual(values = c("Observed" = "black", "Own history" = "gray60",
                                     "+ Southern lag" = "deepskyblue4"), name = "") +
-      facet_wrap(~ year, ncol = 3) +
-      labs(x = "Week of Year", y = "Regional mean log(CEW + 1)",
-           title = paste0(c(T = "Transitional", N = "Northern")[s], " zone, held-out years (",
-                          sub("lag", "Southern lag ", d$setting[1]), " wk)")) +
+      facet_wrap(~ panel, ncol = 1) +
+      labs(x = "Week of Year", y = "Zone mean log(CEW + 1), trapped sites",
+           title = paste0("Held-out year ", oos$year[1], ": one-week-ahead predictions")) +
       theme_minimal()
-    ggsave(filename = file.path(fig_dir, paste0("granger_loyo_", s, ".png")), p_oos, width = 8,
-           height = 9, units = 'in', dpi = 300)
+    ggsave(filename = file.path(fig_dir, "granger_holdout.png"), p_oos, width = 8,
+           height = 6, units = 'in', dpi = 300)
   }
+
+  # DAGs: South -> North directly vs South -> Transitional -> North. Each
+  # test's variation explained (2008-2019); filled = permutation p < 0.05.
+  # S -> N | T = the direct path, T -> N | S = the path through the
+  # Transitional zone. Zone level + each Northern region with its strongest
+  # Southern and Transitional sources (exploratory).
+  dag = read.csv(file.path(step2_dir, "granger_dag.csv")) %>%
+    mutate(sig = !is.na(p_perm) & p_perm < 0.05,
+           test = factor(test, levels = c("S -> N", "T -> N", "S -> N | T", "T -> N | S")),
+           panel = ifelse(level == "zone", paste0("Zones: ", verdict),
+                          paste0(sink, " (", S_source, ", ", T_source, "): ", verdict)),
+           panel = factor(panel, levels = unique(panel[order(level != "zone", sink)])))   # zones first
+  p_dag = ggplot(dag, aes(x = test, y = 100 * gain)) +
+    geom_col(aes(fill = sig), width = 0.6, color = "black", linewidth = 0.2) +
+    scale_fill_manual(values = c("TRUE" = "deepskyblue4", "FALSE" = "gray85"),
+                      labels = c("TRUE" = "p < 0.05", "FALSE" = "n.s."), name = "Permutation \ntest") +
+    facet_wrap(~ panel, ncol = 2) +
+    labs(x = NULL, y = "Variation explained (%), 2008-2019",
+         title = "Direct (S -> N | T) vs through the Transitional zone (T -> N | S)") +
+    theme_minimal() +
+    theme(strip.text = element_text(face = "bold", size = 9))
+
+  ggsave(filename = file.path(fig_dir, "granger_dag.png"), p_dag, width = 9,
+         height = 2.2 + 2 * ceiling(n_distinct(dag$panel) / 2), units = 'in', dpi = 300)
 
   # Region pairs: step-1 peak delay vs step-2 most predictive lag, by distance
   p_delay = ggplot(pairs, aes(x = dist_km)) +

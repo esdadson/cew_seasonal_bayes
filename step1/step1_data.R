@@ -155,14 +155,30 @@ landscape <- bind_rows(lapply(yrs, function(yr) readRDS(file.path(cov_dir, sprin
   # year's file; across years it is 0, not NA
   mutate(across(-c(location2, year), ~ coalesce(.x, 0)))
 
-# EVI points carry the site ids of cew_fourier_covariates.R (groups of the
-# full-timeseries file sorted by lon/lat) - re-key them by coordinates
-evi_key <- read.csv(file.path(root, "pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")) %>%
-  distinct(longitude, latitude) %>% arrange(longitude, latitude) %>% mutate(id = row_number()) %>%
-  inner_join(sites %>% select(longitude, latitude, location2), by = c("longitude", "latitude"))
+# EVI points: MCD43_EVI_points_location2.csv (renv/evi_extraction.ipynb) is
+# keyed by this location2, with each site's coordinates to check the join.
+# Without it, the older MCD43_EVI_points.csv carries the site ids of
+# cew_fourier_covariates.R (groups of the full-timeseries file sorted by
+# lon/lat), re-keyed here by coordinates.
+evi_file <- file.path(root, "pest-occurrence/corn_earworm/MCD43_EVI_points_location2.csv")
+evi_raw <- if (file.exists(evi_file)) {
+  e <- read.csv(evi_file)
+  chk <- e %>% distinct(location2, longitude, latitude) %>%
+    inner_join(sites %>% select(location2, lon_s = longitude, lat_s = latitude), by = "location2")
+  if (nrow(chk) != n_distinct(e$location2) ||
+      !isTRUE(all.equal(chk$longitude, chk$lon_s, tolerance = 1e-6)) ||
+      !isTRUE(all.equal(chk$latitude, chk$lat_s, tolerance = 1e-6)))
+    stop(basename(evi_file), " does not match the site table: rerun renv/evi_extraction.ipynb")
+  e %>% select(location2, date, EVI)
+} else {
+  evi_key <- read.csv(file.path(root, "pest-occurrence/corn_earworm/cew_landscape_metrics_full_timeseries.csv")) %>%
+    distinct(longitude, latitude) %>% arrange(longitude, latitude) %>% mutate(id = row_number()) %>%
+    inner_join(sites %>% select(longitude, latitude, location2), by = c("longitude", "latitude"))
+  read.csv(file.path(root, "pest-occurrence/corn_earworm/MCD43_EVI_points.csv")) %>%
+    inner_join(evi_key %>% select(id, location2), by = "id")
+}
 
-evi <- read.csv(file.path(root, "pest-occurrence/corn_earworm/MCD43_EVI_points.csv")) %>%
-  inner_join(evi_key %>% select(id, location2), by = "id") %>%
+evi <- evi_raw %>%
   mutate(date = as.Date(date), year = isoyear(date), woy = isoweek(date)) %>%
   filter(woy <= 52) %>%
   group_by(location2, year, woy) %>% summarise(EVI = mean(EVI, na.rm = TRUE), .groups = "drop") %>%

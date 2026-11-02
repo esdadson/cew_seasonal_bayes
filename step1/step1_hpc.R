@@ -6,24 +6,28 @@
 # Always run inside a Slurm job from the project directory (the script
 # refuses otherwise on Linux):
 #   STEP1_MODEL=fourier sbatch hpc/step1_dryrun.sbatch   # dry run -> suggested resources
-#   ./hpc/submit_step1.sh all       # fit the three models, then compare + predict
+#   ./hpc/submit_step1.sh all       # fit the models, then compare + predict
 # Modes:
 #   Rscript step1/step1_hpc.R dryrun    # compile + one short chain of STEP1_MODEL
-#   Rscript step1/step1_hpc.R fit       # fit STEP1_MODEL -> fit_<model>.rds, loo_<model>.rds
-#   Rscript step1/step1_hpc.R compare   # loo_compare of the fitted models; predict
+#   Rscript step1/step1_hpc.R fit       # fit STEP1_MODEL to the training years ->
+#                                       # fit_, loo_, metrics_<model>.rds (incl. the
+#                                       # held-out-year validation)
+#   Rscript step1/step1_hpc.R compare   # comparison table of the fitted models; predict
 #                                       # the selected one over weeks 1-52 + peaks
 #
 # Environment:
-#   STEP1_MODEL     fixed | spatial | fourier | simple (dryrun, fit; default fourier)
+#   STEP1_MODEL     fixed | spatial | fourier | fourier_site (dryrun, fit; default fourier)
+#   STEP1_HOLDOUT   out-of-sample validation year (default 2020; none = fit every year)
 #   STEP1_CHAINS, STEP1_ITER, STEP1_WARMUP, STEP1_THIN   (defaults: fit_step1(),
 #                   4 x 15000 iterations, 7500 warmup, thin 30 -> 1000 draws)
 #   STEP1_THREADS   threads per chain (the job needs STEP1_CHAINS x STEP1_THREADS cores)
 #   STEP1_GP_K      GP basis functions per dimension (step1_models.R)
 #   STEP1_FROM_CSV  1 = fit mode rebuilds fit_<model>.rds from the run's saved
 #                   CmdStan CSVs (results/step1/stan_csv/<model>/), no sampling
-#   STEP1_SELECT    model to predict in compare mode (default: the best ELPD)
+#   STEP1_SELECT    model to predict in compare mode (default: the simplest model
+#                   within 2 SE of the best ELPD)
 #   STEP1_PRED_DRAWS  posterior draws of the 52-week predictions kept for step 2 (100)
-#   DRY_WARMUP, DRY_SAMPLING   dry-run chain length (default 150 + 50)
+#   DRY_WARMUP, DRY_SAMPLING   dry-run chain length (default 500 + 100)
 #   CEW_DATA, CEW_OUT          data root and covariates/ (step1_data.R)
 # =============================================================================
 
@@ -41,6 +45,8 @@ mins <- function(t0) as.numeric(difftime(Sys.time(), t0, units = "mins"))
 message(sprintf("Data: %d observed rows (%s), %d sites, %d site-years, %d prediction rows; %.1f min",
                 nrow(d_obs), paste(range(d_obs$year), collapse = "-"), n_distinct(d_obs$location2),
                 n_distinct(d_obs$loc_year), nrow(d_all), mins(t_start)))
+message(sprintf("Training: %d rows; held out (%s): %d rows, %d site-years", nrow(d_fit),
+                ifelse(is.na(holdout), "none", holdout), nrow(d_test), n_distinct(d_test$loc_year)))
 message("CmdStan ", cmdstanr::cmdstan_version(), " at ", cmdstanr::cmdstan_path())
 
 env_int <- function(name, default) as.integer(Sys.getenv(name, default))
@@ -64,14 +70,16 @@ if (mode == "dryrun") {
   # threads per chain: chains run in parallel, so this is one chain's speed.
   t0  <- Sys.time()
   thr <- if (full$threads > 1) threading(full$threads) else NULL
-  dd  <- droplevels(d_obs)
+  dd  <- droplevels(d_fit)
   code  <- make_stancode(step1_formula(model), data = dd, family = gaussian(), prior = step1_priors(model), threads = thr)
   sdata <- make_standata(step1_formula(model), data = dd, family = gaussian(), prior = step1_priors(model), threads = thr)
   mod   <- cmdstanr::cmdstan_model(cmdstanr::write_stan_file(code),
                                    cpp_options = if (full$threads > 1) list(stan_threads = TRUE) else list())
   t_compile <- mins(t0)
 
-  w <- env_int("DRY_WARMUP", 150); s <- env_int("DRY_SAMPLING", 50)
+  # 500 warmup iterations: with fewer, the sampler is barely adapted and the
+  # tree depth (and so the time) is not representative
+  w <- env_int("DRY_WARMUP", 500); s <- env_int("DRY_SAMPLING", 100)
   fit <- mod$sample(data = sdata, chains = 1, iter_warmup = w, iter_sampling = s,
                     threads_per_chain = if (full$threads > 1) full$threads else NULL,
                     seed = 42, init = 0, adapt_delta = step1_control$adapt_delta, max_treedepth = max_td,
@@ -86,11 +94,12 @@ if (mode == "dryrun") {
   h_obs <- full$iter * steps_obs * sec_grad / 3600
   h_max <- full$iter * (2^max_td - 1) * sec_grad / 3600
   h_post <- 1                                 # + data, compile, loo
-  # padded: adaptation in the dry run is short (the full spatial run took
-  # 1.9 x h_obs); if most iterations still hit max tree depth, size for the
-  # worst case
+  # padded: adaptation in the dry run is short; if most iterations still hit
+  # max tree depth, size for the worst case. Four chains sharing a node run
+  # each gradient slower than this lone chain: the 20000-iteration spatial
+  # run took 1.46 x h_max
   at_max <- mean(dg$treedepth__[!in_w] >= max_td)
-  h_req <- (if (at_max > 0.5) 1.15 * h_max else 2.5 * h_obs) + h_post
+  h_req <- (if (at_max > 0.5) 1.6 * h_max else 2.5 * h_obs) + h_post
   qos   <- if (h_req <= 4 * 24) "normal" else if (h_req <= 10 * 24) "long" else NA
   fmt_t <- function(h) { m <- ceiling(min(h, 240) * 60)
     sprintf("%d-%02d:%02d:00", m %/% 1440, (m %% 1440) %/% 60, m %% 60) }
@@ -100,8 +109,13 @@ if (mode == "dryrun") {
   n_draws <- full$chains * (full$iter - full$warmup) %/% full$thin
   n_var <- ncol(posterior::as_draws_df(fit$draws()))
   gb_draws <- n_var * n_draws * 8 / 1024^3
-  gb_loo <- 2 * n_draws * nrow(d_obs) * 8 / 1024^3
+  gb_loo <- 2 * n_draws * nrow(d_fit) * 8 / 1024^3
   mem <- peak_mem_gb()
+  # Scale parameters after warmup: a GP sd (sdgp) far beyond its exponential(1)
+  # prior, or a length-scale at the bottom of its prior, means the GP cannot
+  # represent the site-to-site variation and the sampler will crawl
+  hyp <- grep("^(sdgp|lscale|sd_|sigma)", fit$metadata()$stan_variables, value = TRUE)
+  hyp_tab <- posterior::summarise_draws(fit$draws(variables = hyp), "median", "rhat", "ess_bulk")
 
   message("\n--- Dry run of '", model, "' (1 chain, ", w, " warmup + ", s, " sampling iterations, ",
           full$threads, " thread(s)) ---")
@@ -114,6 +128,8 @@ if (mode == "dryrun") {
   message(sprintf("Parameters saved per draw: %d; %d draws -> %.2f GB of draws, %.1f GB for loo",
                   n_var, n_draws, gb_draws, gb_loo))
   message("Peak memory of R in the dry run: ", round(mem, 2), " GB")
+  message("Scale parameters over the ", s, " sampling iterations (ESS of ", s, " draws):")
+  print(as.data.frame(hyp_tab), digits = 3, row.names = FALSE)
 
   message(sprintf("\n--- Full run: %d chains x %d iterations (%d warmup, thin %d), %d thread(s) per chain ---",
                   full$chains, full$iter, full$warmup, full$thin, full$threads))
@@ -165,40 +181,68 @@ if (mode == "dryrun") {
                   min(summarise_draws(as_draws_df(fit), "ess_bulk")$ess_bulk, na.rm = TRUE),
                   min(summarise_draws(as_draws_df(fit), "ess_tail")$ess_tail, na.rm = TRUE)))
 
-  # PSIS-LOO (leave one week out) for loo_compare in compare mode
+  # PSIS-LOO (leave one week out) for loo_compare in compare mode; the PSIS
+  # weights also give the LOO predictions (step1_metrics), but are too large to save
   t0 <- Sys.time()
-  lo <- loo(fit)
-  saveRDS(lo, pf$loo)
+  lo <- loo(fit, save_psis = TRUE)
   print(lo)
+  lo_save <- lo; lo_save$psis_object <- NULL
+  saveRDS(lo_save, pf$loo)
   message(sprintf("PSIS-LOO: %.1f min. Saved %s", mins(t0), pf$loo))
+
+  # R^2, MAE (training years, in-sample and LOO) and held-out-year validation
+  t0 <- Sys.time(); set.seed(42)
+  mt <- step1_metrics(fit, model, lo, d_test)
+  saveRDS(mt, pf$metrics)
+  print(t(mt$metrics), quote = FALSE)
+  message(sprintf("Metrics: %.1f min. Saved %s", mins(t0), pf$metrics))
   message("Peak memory of R: ", round(peak_mem_gb(), 2), " GB")
 
 } else if (mode == "compare") {
   # ---- Model comparison -------------------------------------------------------
-  # elpd_diff = expected log predictive density relative to the best model;
-  # a difference within ~2 se_diff is not a clear preference - prefer the
-  # simpler model then (STEP1_SELECT overrides the choice).
-  loo_have <- Filter(file.exists, sapply(names(step1_terms), function(m) step1_files(m)$loo))
-  if (!length(loo_have)) stop("No loo_<model>.rds in ", step1_dir, ": run the fit jobs first")
-  los <- lapply(loo_have, readRDS)
-  for (m in names(los)) { message("\n", m, ": Pareto k diagnostics"); print(loo::pareto_k_table(los[[m]])) }
-  if (length(los) >= 2) {
+  # elpd_diff = expected log predictive density (PSIS-LOO, training years)
+  # relative to the best model. A difference within 2 se_diff is not a clear
+  # preference, so the simplest such model is selected - each added block
+  # (GP, seasonal curves, site curves) must earn its parameters. The held-out
+  # year's elpd, MAE and R^2 check the choice out of sample. STEP1_SELECT
+  # overrides it.
+  have <- names(step1_terms)[file.exists(sapply(names(step1_terms), function(m) step1_files(m)$metrics))]
+  if (!length(have)) stop("No metrics_<model>.rds in ", step1_dir, ": run the fit jobs first")
+  los <- setNames(lapply(have, function(m) readRDS(step1_files(m)$loo)), have)
+  mts <- setNames(lapply(have, function(m) readRDS(step1_files(m)$metrics)), have)
+  for (m in have) { message("\n", m, ": Pareto k diagnostics"); print(loo::pareto_k_table(los[[m]])) }
+  lc_tab <- if (length(los) >= 2) {
     lc <- loo::loo_compare(los)
     print(lc, simplify = FALSE)
-    lc_tab <- data.frame(model = rownames(lc), as.data.frame(unclass(lc)), row.names = NULL)
-  } else {
-    lc_tab <- data.frame(model = names(los), t(los[[1]]$estimates[, "Estimate"]), row.names = NULL)
-  }
-  write.csv(lc_tab, file.path(step1_dir, "loo_compare.csv"), row.names = FALSE)
-  sel <- Sys.getenv("STEP1_SELECT", lc_tab$model[1])
-  stopifnot(sel %in% names(los))
+    data.frame(model = rownames(lc), elpd_diff = lc[, "elpd_diff"], se_diff = lc[, "se_diff"])
+  } else data.frame(model = have, elpd_diff = 0, se_diff = 0)
+  cmp <- bind_rows(lapply(mts, `[[`, "metrics")) %>%
+    left_join(lc_tab, by = "model") %>%
+    mutate(model = factor(model, levels = names(step1_terms))) %>% arrange(model) %>%
+    mutate(model = as.character(model),
+           within_2se = elpd_diff == 0 | -elpd_diff < 2 * se_diff)
+  auto <- cmp$model[which(cmp$within_2se)[1]]                     # simplest within 2 SE
+  sel  <- Sys.getenv("STEP1_SELECT", auto)
+  stopifnot(sel %in% have)
+  cmp$selected <- cmp$model == sel
+  print(cmp %>% select(model, elpd_diff, se_diff, p_loo, bayes_R2, loo_R2, mae_train, mae_loo,
+                       any_of(c("elpd_test", "mae_test", "R2_test", "cov90_test")), selected),
+        digits = 3)
+  write.csv(cmp, file.path(step1_dir, "model_comparison.csv"), row.names = FALSE)
   message(sprintf("\nSelected model: '%s'%s", sel,
-                  if (nzchar(Sys.getenv("STEP1_SELECT"))) " (STEP1_SELECT)" else " (best ELPD)"))
+                  if (nzchar(Sys.getenv("STEP1_SELECT"))) " (STEP1_SELECT)" else " (simplest within 2 SE of the best ELPD)"))
+  # Held-out-year predictions of every model (summary figure in CEW_JIPM_Figures.R)
+  if (!is.null(mts[[1]]$test_zone_week)) {
+    write.csv(bind_rows(lapply(mts, `[[`, "test_zone_week")), file.path(step1_dir, "holdout_zone_week.csv"),
+              row.names = FALSE)
+    write.csv(bind_rows(lapply(mts, `[[`, "test_rows")), file.path(step1_dir, "holdout_rows.csv"),
+              row.names = FALSE)
+  }
 
   # ---- Predictions over weeks 1-52 and peaks -----------------------------------
   t0 <- Sys.time(); set.seed(42)
   fit <- readRDS(paste0(step1_files(sel)$fit, ".rds"))
-  pr  <- predict_step1(fit, d_all, n_keep = env_int("STEP1_PRED_DRAWS", 100))
+  pr  <- predict_step1(fit, sel, d_all, n_keep = env_int("STEP1_PRED_DRAWS", 100))
   saveRDS(list(model = sel, pred = pr$pred, draws = pr$draws), file.path(step1_dir, "predictions.rds"))
   saveRDS(c(pr$peaks, model = sel), file.path(step1_dir, "peak_draws.rds"))
   message(sprintf("Predictions (%d rows x %d draws; %d kept) and peaks (%d site-years): %.1f min",
@@ -215,9 +259,10 @@ if (mode == "dryrun") {
   write.csv(zone_curve_summary(pr$zone_curve), file.path(step1_dir, "pred_zone_week.csv"), row.names = FALSE)
 
   # Modelling data for step 2 (so it doesn't rebuild it from the covariates)
-  saveRDS(list(d_all = d_all, sites = sites, anom_vars = anom_vars, yrs = yrs, peak_win = peak_win),
+  saveRDS(list(d_all = d_all, sites = sites, anom_vars = anom_vars, yrs = yrs, peak_win = peak_win,
+               holdout = holdout),
           file.path(step1_dir, "model_data.rds"))
-  message("Saved to ", step1_dir, ": loo_compare.csv, predictions.rds, peak_draws.rds, peak_*.csv, ",
-          "pred_zone_week.csv, model_data.rds")
+  message("Saved to ", step1_dir, ": model_comparison.csv, holdout_*.csv, predictions.rds, peak_draws.rds, ",
+          "peak_*.csv, pred_zone_week.csv, model_data.rds")
   message("Peak memory of R: ", round(peak_mem_gb(), 2), " GB")
 }

@@ -2,9 +2,11 @@
 # step2/step2_functions.R
 # Helpers for step2/step2_granger.R: regional clustering, regional weekly
 # series, and Granger-causality tests from Southern to Transitional/
-# Northern regions - in-sample F tests, leave-one-year-out (LOYO) out-of-
-# sample gain and a year-permutation null. cluster (for silhouettes) ships
-# with R.
+# Northern regions - fit on the training years (in-sample F test and a
+# year-permutation null), validated on the held-out year (as in step 1).
+# Conditional tests (one series given another) compare the two DAGs,
+# South -> North directly vs South -> Transitional -> North. cluster (for
+# silhouettes) ships with R.
 # =============================================================================
 
 library(dplyr)
@@ -135,125 +137,183 @@ seasonal_clim <- function(Y, rows, H = 3, min_years = 3) {
 }
 
 # -----------------------------------------------------------------------------
-# Regression rows for one sink/source pair: response = sink anomaly at week
-# w; own lags, source lags (negative = leads) and the sink's controls.
-# A_resp: the response series (default A_sink; e.g. the mean over trapped
-# sites only, while A_sink - observed + filled - supplies the own lags).
-# resp_ok (years x 52 logical): weeks allowed as responses (e.g. the sink's
-# season window); the others still serve as lags. Complete cases only, so
-# the restricted and full models share rows.
+# Regression rows for one sink: response = sink anomaly at week w; the sink's
+# own lags; the lags of each predictor series (lags: named list, series name
+# -> lags, negative = leads; A_pred: named list of anomaly matrices); the
+# sink's controls. A_resp: the response series (default A_sink; e.g. the mean
+# over trapped sites only, while A_sink - observed + filled - supplies the own
+# lags). resp_ok (years x 52 logical): weeks allowed as responses (e.g. the
+# sink's season window); the others still serve as lags. Complete cases only,
+# so nested models share rows.
 # -----------------------------------------------------------------------------
-granger_rows <- function(A_sink, A_src, X, own, src, resp_ok = NULL, A_resp = A_sink) {
-  nm_src <- ifelse(src >= 0, paste0("src_lag", src), paste0("src_lead", -src))
+lag_names <- function(s, k) paste0(s, ifelse(k >= 0, "_lag", "_lead"), abs(k))
+
+granger_design <- function(A_sink, A_pred, lags, own, X, resp_ok = NULL, A_resp = A_sink) {
   y <- A_resp
   if (!is.null(resp_ok)) y[!resp_ok] <- NA
+  pcols <- do.call(c, c(list(list()), lapply(names(lags), function(s)
+    setNames(lapply(lags[[s]], function(k) lag_cols(A_pred[[s]], k)), lag_names(s, lags[[s]])))))
   cols <- c(list(y = y),
             setNames(lapply(own, function(k) lag_cols(A_sink, k)), paste0("own_lag", own)),
-            setNames(lapply(src, function(k) lag_cols(A_src, k)), nm_src),
-            X)
+            pcols, X)
   M  <- vapply(cols, as.vector, numeric(length(A_sink)))
   yr <- rep(seq_len(nrow(A_sink)), times = ncol(A_sink))
   wk <- rep(seq_len(ncol(A_sink)), each = nrow(A_sink))
   ok <- complete.cases(M)
-  list(M = M[ok, , drop = FALSE], year = yr[ok], woy = wk[ok], src = nm_src)
+  list(M = M[ok, , drop = FALSE], year = yr[ok], woy = wk[ok])
 }
 
 ols_fit <- function(X, y) { cf <- qr.coef(qr(X), y); cf[is.na(cf)] <- 0; cf }
 
-# -----------------------------------------------------------------------------
-# Granger comparison of one sink and one source series for several lag
-# settings (list of list(own = own lags, src = source lags), named).
-#   Restricted R: sink anomaly ~ 1 + own lags + controls
-#   Full       U: R + source lags
-# Anomaly = series - seasonal_clim(). In-sample: climatology and fits on all
-# years -> F test of the source lags. LOYO: for each year, climatologies and
-# fits use the other years only, and that year is predicted; gain =
-# 1 - SSE_U / SSE_R summed over held-out years (> 0: Southern lags improve
-# out-of-sample prediction). years_better = held-out years where U beat R.
-#   Ys, Yk: sink / source years x 52; X: list of sink years x 52 controls
-#   Ys_resp: sink response series (default Ys), e.g. the mean of trapped sites
-#     only; it shares the sink's climatology
-#   resp_ok: sink weeks allowed as responses (see granger_rows)
-#   Ys_oos, Yk_oos: optional years x 52 series whose row t replaces row t of
-#     Ys / Yk when year t is held out (step-1 fills from the fit without year t)
-# Returns list(table = one row per setting, pred = held-out predictions).
-# -----------------------------------------------------------------------------
-granger_pair <- function(Ys, Yk, X, settings, Ys_resp = Ys, resp_ok = NULL, Ys_oos = NULL,
-                         Yk_oos = NULL, H = 3, min_years = 3, keep_pred = FALSE) {
-  ny <- nrow(Ys); all_y <- seq_len(ny)
-  anoms <- function(rows, S = Ys, K = Yk) {        # climatology from `rows` only
-    cs <- seasonal_clim(S, rows, H, min_years); ck <- seasonal_clim(K, rows, H, min_years)
-    list(s = sweep(S, 2, cs), k = sweep(K, 2, ck), r = sweep(Ys_resp, 2, cs), clim_s = cs)
-  }
-  # in-sample F tests
-  a <- anoms(all_y)
-  ins <- lapply(settings, function(st) {
-    r  <- granger_rows(a$s, a$k, X, st$own, st$src, resp_ok, a$r)
-    y  <- r$M[, "y"]; XU <- cbind(1, r$M[, -1, drop = FALSE]); XR <- XU[, !colnames(XU) %in% r$src, drop = FALSE]
-    n  <- length(y); q <- length(r$src)
-    sse <- function(Xm) sum((y - Xm %*% ols_fit(Xm, y))^2)
-    sR <- sse(XR); sU <- sse(XU); df2 <- n - ncol(XU)
-    Fst <- if (df2 > 0) ((sR - sU) / q) / (sU / df2) else NA
-    cfU <- if (n > ncol(XU)) ols_fit(XU, y)[r$src] else NA
-    data.frame(n = n, F = Fst, df1 = q, df2 = df2, p_F = pf(Fst, q, df2, lower.tail = FALSE),
-               src_coef_sum = sum(cfU))
-  })
-  # leave-one-year-out
-  sse <- matrix(0, length(settings), 2 * ny, dimnames = list(names(settings), NULL))
-  ntest <- matrix(0L, length(settings), ny)
-  preds <- list()
-  for (t in all_y) {
-    S <- Ys; K <- Yk
-    if (!is.null(Ys_oos)) S[t, ] <- Ys_oos[t, ]
-    if (!is.null(Yk_oos)) K[t, ] <- Yk_oos[t, ]
-    a <- anoms(all_y[-t], S, K)
-    for (s in seq_along(settings)) {
-      st <- settings[[s]]
-      r  <- granger_rows(a$s, a$k, X, st$own, st$src, resp_ok, a$r)
-      XU <- cbind(1, r$M[, -1, drop = FALSE]); XR <- XU[, !colnames(XU) %in% r$src, drop = FALSE]
-      y  <- r$M[, "y"]; tr <- r$year != t; te <- r$year == t
-      if (!any(te) || sum(tr) <= ncol(XU)) next
-      pR <- XR[te, , drop = FALSE] %*% ols_fit(XR[tr, , drop = FALSE], y[tr])
-      pU <- XU[te, , drop = FALSE] %*% ols_fit(XU[tr, , drop = FALSE], y[tr])
-      sse[s, t] <- sum((y[te] - pR)^2); sse[s, ny + t] <- sum((y[te] - pU)^2)
-      ntest[s, t] <- sum(te)
-      if (keep_pred)
-        preds[[length(preds) + 1]] <- data.frame(setting = names(settings)[s], year_i = t, woy = r$woy[te],
-                                                 clim = a$clim_s[r$woy[te]], anom = y[te],
-                                                 pred_R = drop(pR), pred_U = drop(pU))
-    }
-  }
-  sR <- sse[, 1:ny, drop = FALSE]; sU <- sse[, ny + 1:ny, drop = FALSE]
-  tab <- as_tibble(bind_rows(ins, .id = "setting")) %>%
-    mutate(n_test = rowSums(ntest), loyo_gain = 1 - rowSums(sU) / rowSums(sR),
-           years_better = rowSums(sU < sR & ntest > 0), years_tested = rowSums(ntest > 0))
-  list(table = tab, pred = bind_rows(preds))
-}
-
-# -----------------------------------------------------------------------------
-# Year-permutation null: the source's seasons are reassigned to other years
-# (a derangement), keeping each season's within-year shape but breaking the
-# link to the sink's year; the whole LOYO procedure is rerun. The source's
-# held-out-year series (Yk_oos) is permuted with it. Returns an n_perm x
-# settings matrix of null LOYO gains.
-# -----------------------------------------------------------------------------
+# A derangement of 1..n (no element stays in place)
 derange <- function(n) { repeat { p <- sample.int(n); if (all(p != seq_len(n))) return(p) } }
+# n_perm derangements of the training years, shared by the settings of one
+# scan so that a max-over-settings p-value is valid
+make_perms <- function(n_train, n_perm) t(replicate(n_perm, derange(n_train)))
 
-granger_perm <- function(Ys, Yk, X, settings, n_perm = 199, Yk_oos = NULL, ...) {
-  t(vapply(seq_len(n_perm), function(i) {
-    p <- derange(nrow(Yk))
-    granger_pair(Ys, Yk[p, , drop = FALSE], X, settings,
-                 Yk_oos = if (is.null(Yk_oos)) NULL else Yk_oos[p, , drop = FALSE], ...)$table$loyo_gain
-  }, numeric(length(settings))))
+# -----------------------------------------------------------------------------
+# Granger test for one sink: do the lags in `test` improve on a model with
+# the sink's own lags, its controls and the lags in `base`?
+#   R: a_sink(w) = c + own lags + controls + base lags + e
+#   U: R + test lags
+# a_ = series minus its seasonal climatology (Fourier, H pairs), fit on the
+# training years only. Regressions are fit on the training years (`train`,
+# row indices of the years x 52 matrices); the held-out years (`holdout`)
+# are predicted from that fit.
+#   Ys: sink years x 52 (observed + step-1 fills: the own lags); preds: named
+#   list of predictor series (years x 52); X: list of the sink's controls;
+#   Ys_resp: sink response (trapped sites only; shares the sink's climatology);
+#   resp_ok: sink weeks allowed as responses.
+# Returns list(table = one row, null = permutation F's, pred = held-out rows):
+#   F, p_F       in-sample F test of the test lags (nominal: serially
+#                correlated errors make it optimistic, hence p_perm)
+#   gain         1 - SSE_U / SSE_R in the training years: the share of the
+#                sink's remaining variation the test lags explain (partial R^2)
+#   coef_sum     sum of the test lags' coefficients (sign of the association)
+#   p_perm       year-permutation p of F: the test series' seasons are
+#                reassigned among the training years (perms rows), keeping
+#                each season's shape but breaking its link to the sink's year
+#   gain_holdout 1 - SSE_U / SSE_R in the held-out years (> 0: out of sample,
+#                the test lags improve the prediction)
+# -----------------------------------------------------------------------------
+granger_test <- function(Ys, preds, X, own = 1:2, test, base = list(), Ys_resp = Ys, resp_ok = NULL,
+                         train, holdout = integer(), H = 3, min_years = 3, perms = NULL, keep_pred = FALSE) {
+  cs  <- seasonal_clim(Ys, train, H, min_years)
+  A_s <- sweep(Ys, 2, cs); A_r <- sweep(Ys_resp, 2, cs)
+  A_p <- lapply(preds[unique(c(names(base), names(test)))],
+                function(P) sweep(P, 2, seasonal_clim(P, train, H, min_years)))
+  tcols <- unlist(lapply(names(test), function(s) lag_names(s, test[[s]])))
+  lags  <- c(base, test)
+  if (any(duplicated(names(lags)))) stop("granger_test: a series is in both base and test")
+  fit1 <- function(Ap, full = TRUE) {
+    r  <- granger_design(A_s, Ap, lags, own, X, resp_ok, A_r)
+    y  <- r$M[, "y"]; XU <- cbind(1, r$M[, -1, drop = FALSE])
+    XR <- XU[, !colnames(XU) %in% tcols, drop = FALSE]
+    tr <- r$year %in% train
+    bU <- ols_fit(XU[tr, , drop = FALSE], y[tr]); bR <- ols_fit(XR[tr, , drop = FALSE], y[tr])
+    sU <- sum((y[tr] - XU[tr, , drop = FALSE] %*% bU)^2); sR <- sum((y[tr] - XR[tr, , drop = FALSE] %*% bR)^2)
+    n <- sum(tr); q <- length(tcols); df2 <- n - ncol(XU)
+    Fst <- if (df2 > 0 && sU > 0) ((sR - sU) / q) / (sU / df2) else NA_real_
+    if (!full) return(Fst)
+    te <- r$year %in% holdout
+    pR <- drop(XR[te, , drop = FALSE] %*% bR); pU <- drop(XU[te, , drop = FALSE] %*% bU)
+    list(tab = data.frame(n = n, df1 = q, df2 = df2, F = Fst, p_F = pf(Fst, q, df2, lower.tail = FALSE),
+                          gain = 1 - sU / sR, coef_sum = sum(bU[tcols]), n_holdout = sum(te),
+                          gain_holdout = if (any(te)) 1 - sum((y[te] - pU)^2) / sum((y[te] - pR)^2) else NA_real_),
+         pred = if (keep_pred && any(te)) data.frame(year_i = r$year[te], woy = r$woy[te], clim = cs[r$woy[te]],
+                                                     anom = y[te], pred_R = pR, pred_U = pU) else NULL)
+  }
+  out  <- fit1(A_p)
+  null <- NULL
+  if (!is.null(perms)) {
+    null <- apply(perms, 1, function(p) {
+      Ap <- A_p
+      for (s in names(test)) Ap[[s]][train, ] <- A_p[[s]][train[p], ]
+      fit1(Ap, full = FALSE)
+    })
+    out$tab$p_perm <- (1 + sum(null >= out$tab$F, na.rm = TRUE)) / (1 + length(null))
+  }
+  list(table = out$tab, null = null, pred = out$pred)
 }
 
-# Permutation p-values: per setting, and for the best of the settings in
-# max_cols (max over them), which accounts for choosing the best lag
-perm_p <- function(obs, null, max_cols = rep(TRUE, length(obs))) {
-  per <- (1 + colSums(sweep(null, 2, obs, ">="), na.rm = TRUE)) / (1 + nrow(null))
-  mx  <- (1 + sum(apply(null[, max_cols, drop = FALSE], 1, max, na.rm = TRUE) >=
-                    max(obs[max_cols], na.rm = TRUE))) / (1 + nrow(null))
-  list(per_setting = per, max = mx)
+# Permutation p of the best of several settings scanned with the same perms
+# (null: n_perm x settings F's): accounts for having picked the best one
+perm_max_p <- function(F_obs, null)
+  (1 + sum(apply(null, 1, max, na.rm = TRUE) >= max(F_obs, na.rm = TRUE))) / (1 + nrow(null))
+
+# -----------------------------------------------------------------------------
+# Lag scan of one source series for one sink: each lag (negative = lead) on
+# its own, with the sink's own lags, all sharing one set of permutations.
+# Returns the per-lag table plus p_perm_max (the best lag against the null of
+# the best lag) and the held-out predictions (keep_pred).
+# -----------------------------------------------------------------------------
+lag_scan <- function(Ys, Yk, X, lags, own = 1:2, n_perm = 0, train, holdout = integer(),
+                     keep_pred = FALSE, ...) {
+  perms <- if (n_perm > 0) make_perms(length(train), n_perm) else NULL
+  res <- lapply(lags, function(k) granger_test(Ys, list(src = Yk), X, own, test = list(src = k),
+                                               train = train, holdout = holdout, perms = perms,
+                                               keep_pred = keep_pred, ...))
+  setting <- ifelse(lags >= 0, paste0("lag", lags), paste0("lead", -lags))
+  tab <- as_tibble(bind_rows(lapply(res, `[[`, "table"))) %>% mutate(setting = setting, lag = lags, .before = 1)
+  if (n_perm > 0) {
+    is_lag <- lags > 0
+    null <- do.call(cbind, lapply(res, `[[`, "null"))
+    tab$p_perm_max <- perm_max_p(tab$F[is_lag], null[, is_lag, drop = FALSE])
+  }
+  pred <- bind_rows(lapply(seq_along(res), function(i)
+    if (is.null(res[[i]]$pred)) NULL else res[[i]]$pred %>% mutate(setting = setting[i])))
+  list(table = tab, pred = pred)
+}
+
+# -----------------------------------------------------------------------------
+# DAG tests for one Northern sink with a Southern (S) and a Transitional (T)
+# series - which path carries the Southern signal north?
+#   DAG direct : S -> N              (S predicts N, T adds nothing given S)
+#   DAG chain  : S -> T -> N         (S predicts N only through T)
+#   S -> N       S lags vs own lags only        (is there a Southern signal?)
+#   T -> N       T lags vs own lags only
+#   S -> N | T   S lags given T lags            (the direct path)
+#   T -> N | S   T lags given S lags            (the mediated path)
+# Verdict: chain = T -> N | S significant, S -> N | T not, and S -> T
+# established (s_to_t, from the S -> T test); direct = S -> N | T significant,
+# T -> N | S not; both = both significant.
+# Also the four nested models' AIC / BIC (training years) and held-out MSE.
+# -----------------------------------------------------------------------------
+dag_tests <- function(Ys, S, T, X, lags_S, lags_T, own = 1:2, n_perm = 199, train, holdout = integer(),
+                      Ys_resp = Ys, resp_ok = NULL, H = 3, min_years = 3, alpha = 0.05, s_to_t = NA) {
+  pr <- list(S = S, T = T)
+  tst <- function(test, base) granger_test(Ys, pr, X, own, test = test, base = base, Ys_resp = Ys_resp,
+                                           resp_ok = resp_ok, train = train, holdout = holdout, H = H,
+                                           min_years = min_years,
+                                           perms = if (n_perm > 0) make_perms(length(train), n_perm))$table
+  tab <- as_tibble(bind_rows(
+    `S -> N`     = tst(list(S = lags_S), list()),
+    `T -> N`     = tst(list(T = lags_T), list()),
+    `S -> N | T` = tst(list(S = lags_S), list(T = lags_T)),
+    `T -> N | S` = tst(list(T = lags_T), list(S = lags_S)), .id = "test"))
+  # Nested models on common rows (the design with every lag): own lags only,
+  # + S (direct), + T (chain), + S + T (both)
+  mods <- list(own = list(), direct = list(S = lags_S), chain = list(T = lags_T), both = list(S = lags_S, T = lags_T))
+  cs  <- seasonal_clim(Ys, train, H, min_years)
+  A_p <- lapply(pr, function(P) sweep(P, 2, seasonal_clim(P, train, H, min_years)))
+  r_all <- granger_design(sweep(Ys, 2, cs), A_p, mods$both, own, X, resp_ok, sweep(Ys_resp, 2, cs))
+  y <- r_all$M[, "y"]; tr <- r_all$year %in% train; te <- r_all$year %in% holdout
+  ic <- bind_rows(lapply(names(mods), function(m) {
+    keep <- c("y", paste0("own_lag", own), names(X),
+              unlist(lapply(names(mods[[m]]), function(s) lag_names(s, mods[[m]][[s]]))))
+    Xm <- cbind(1, r_all$M[, setdiff(keep, "y"), drop = FALSE])
+    b <- ols_fit(Xm[tr, , drop = FALSE], y[tr]); n <- sum(tr); k <- ncol(Xm) + 1
+    sse <- sum((y[tr] - Xm[tr, , drop = FALSE] %*% b)^2)
+    data.frame(model = m, k = k, AIC = n * log(sse / n) + 2 * k, BIC = n * log(sse / n) + log(n) * k,
+               mse_holdout = if (any(te)) mean((y[te] - Xm[te, , drop = FALSE] %*% b)^2) else NA_real_)
+  })) %>% mutate(dAIC = AIC - min(AIC), dBIC = BIC - min(BIC))
+  p <- setNames(tab$p_perm, tab$test)
+  sig <- function(t) !is.na(p[[t]]) && p[[t]] < alpha
+  verdict <- if (sig("S -> N | T") && sig("T -> N | S")) "both paths" else
+    if (sig("T -> N | S")) { if (isTRUE(s_to_t)) "chain (S -> T -> N)" else "T -> N, but S -> T not shown" } else
+    if (sig("S -> N | T")) "direct (S -> N)" else
+    if (sig("S -> N") || sig("T -> N")) "signal, path unresolved" else "no signal"
+  list(tests = tab, models = ic, verdict = verdict)
 }
 
 # -----------------------------------------------------------------------------
