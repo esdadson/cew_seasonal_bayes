@@ -74,8 +74,7 @@ step1_priors <- function(model) {
               prior(normal(0, 0.5), class = "b", dpar = "sigma")))
   if (has_term(model, four_mu[1]))
     p <- c(p, prior(normal(0, 2), class = "b", coef = "f1"), prior(normal(0, 2), class = "b", coef = "f2"),
-           prior(normal(0, 2), class = "b", coef = "f3"), prior(normal(0, 2), class = "b", coef = "f4"),
-           prior(student_t(3, 0, 0.5), class = "sd", group = "zone_fac"))
+           prior(normal(0, 2), class = "b", coef = "f3"), prior(normal(0, 2), class = "b", coef = "f4")
   p
 }
 
