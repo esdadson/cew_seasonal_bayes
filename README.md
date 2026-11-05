@@ -13,7 +13,7 @@ cew_seasonal_bayes/
 ├── notebooks/evi_extraction.ipynb   MODIS EVI per site (Earth Engine), keyed by location2
 ├── step1/                      Step 1: weekly Bayesian model of log(CEW + 1)
 │   ├── step1_data.R              modelling data from covariates/
-│   ├── step1_models.R            candidate models (fixed, seasonal), priors, sampler, metrics
+│   ├── step1_models.R            candidate models (fixed, seasonal, spatial), priors, sampler, metrics
 │   └── step1_compare.R           fits, LOO + held-out 2020 scores -> results/step1/
 ├── step2/                      Step 2: regions, Granger causality S -> T / N, DAGs   [laptop]
 ├── hpc/                        Slurm scripts and the Hazel guide (hpc/README.md)

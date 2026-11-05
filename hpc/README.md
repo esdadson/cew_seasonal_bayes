@@ -242,14 +242,17 @@ Run everything from `cew_seasonal_bayes`.
 > describes (`step1_models.R`, `step1_hpc.R`, `step1*.sbatch`, `submit_step1.sh`) are now in
 > `archive/step1_v1/` and no longer run from their old paths. This section will be rewritten for the new comparison.
 >
-> **Current comparison (fixed vs seasonal):** one job fits both models in turn.
+> **Current comparison (fixed, seasonal, spatial):** one job fits the three models in turn.
 > ```bash
 > git pull                                   # get step1/step1_models.R, step1_compare.R, hpc/step1_compare.sbatch
 > sbatch hpc/step1_compare.sbatch            # "Submitted batch job <jobid>"
 > tail -f logs/step1_compare.<jobid>.out     # Ctrl-C stops watching only
 > seff <jobid>                               # time and memory used, after it ends
 > ```
-> Results land in `results/step1/` (comparison.csv, test_rows.csv, coverage_by_season.csv and two PNGs).
+> Results land in `results/step1/` (comparison.csv, test_rows.csv, coverage_by_season.csv,
+> spatial_range.csv, time_estimates.csv and two PNGs). `time_estimates.csv` projects the final
+> all-years fit from the measured timings; compare `fit_wall_min` in comparison.csv between the
+> laptop and Hazel to rescale it.
 > Copy them to the laptop with `scp -r <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/results/step1 results/`.
 
 Step 1 lives in `step1/` and step 2 in `step2/`. The original scripts at the top level are unchanged.

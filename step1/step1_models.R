@@ -12,10 +12,31 @@
 #  seasonal : fixed + sum_k f_k(w) (g_k + g_zk)
 #             f_1..f_4 = 2-harmonic Fourier basis of week, orthogonalised
 #             (step1_data.R section 5: f1, f2 span the first harmonic, f3, f4
-#             add the second); g_k = seasonal curve shared by all sites,
-#             g_zk ~ N(0, sd_k) = zone deviations (|| = uncorrelated)
-#  Later (not yet fit): seasonal sigma (sigma ~ f1 + f2), site and spatial
-#  site intercepts. A model is list(mu = <terms>, sigma = <terms or NULL>).
+#             add the second); g_k = the Northern-limits curve, g_zk (fixed,
+#             z = Transitional, Southern) = each zone's difference from it:
+#             one curve per zone, 12 coefficients
+#  spatial  : seasonal + v_i, a spatially correlated site effect (exact GP
+#             over the monitored sites with a fixed range):
+#               v ~ N(0, sd_site^2 K),  K = rho C + (1 - rho) I,
+#               C_ij = exp(-d_ij / phi),  d = CONUS Albers km between sites
+#             rho (spatial share) and phi (range) are estimated once from the
+#             correlogram of site-mean residuals (section "Spatial site
+#             effect") and held fixed, so the model adds ONE parameter
+#             (sd_site), samples like an independent site intercept, and an
+#             unmonitored location can be kriged from its lon/lat:
+#               v0 | v ~ N(rho c0' K^-1 v, sd_site^2 (1 - rho^2 c0' K^-1 c0))
+#  spatial_gp : seasonal + gp(longitude, latitude, gr = TRUE, iso = TRUE,
+#             scale = TRUE), brms' exact GP (no k): computed over the unique
+#             site coordinates (gr), one length-scale for both axes (iso),
+#             coordinates scaled so the largest distance is 1 (scale);
+#             squared-exponential kernel (brms default). Estimates sd_gp and
+#             the length-scale (brms' default priors) plus one latent value
+#             per site. Cost per gradient grows with sites^3.
+#             Note: in degrees, 1 deg of longitude (~80-95 km here) is shorter
+#             than 1 deg of latitude (111 km), so iso = TRUE is only
+#             approximately isotropic; x_km, y_km would be exact.
+#  Later (not yet fit): seasonal sigma (sigma ~ f1 + f2).
+#  A model is list(mu = <terms>, sigma = <terms or NULL>).
 # =============================================================================
 
 source("step1/step1_data.R")
@@ -38,10 +59,15 @@ year_term <- "(1 | year_f)"
 covs      <- "EVI_filled + gdd + corn + cotton + soybeans + tobacco + peanuts + other"
 four_mu   <- c("f1 + f2 + f3 + f4", "zone_fac:(f1 + f2 + f3 + f4)")
 
+site_term <- "(1 | gr(location2, cov = K))"
+gp_term   <- "gp(longitude, latitude, gr = TRUE, iso = TRUE, scale = TRUE)"
+
 terms_fixed <- c("0 + zone_fac + trap_type", year_term, covs)
 step1_specs <- list(
   fixed    = list(mu = terms_fixed),
-  seasonal = list(mu = c(terms_fixed, four_mu))
+  seasonal = list(mu = c(terms_fixed, four_mu)),
+  spatial  = list(mu = c(terms_fixed, four_mu, site_term)),
+  spatial_gp = list(mu = c(terms_fixed, four_mu, gp_term))
 )
 
 has_term <- function(model, term) term %in% step1_specs[[model]]$mu
@@ -56,12 +82,74 @@ na_vars <- unique(unlist(lapply(names(step1_specs), function(m) all.vars(step1_f
 na_vars <- na_vars[colSums(is.na(d_obs[intersect(na_vars, names(d_obs))])) > 0]
 if (length(na_vars)) stop("NA in model variables of the observed rows: ", paste(na_vars, collapse = ", "))
 
+# =============================================================================
+# Spatial site effect: range and spatial share ---------------------------------
+#   Trend = the seasonal model's terms with years as fixed effects, by OLS on
+#   the fitting rows. Site-mean residuals, standardised; their products
+#   averaged by distance bin give the correlogram; rho exp(-h / phi) is fit by
+#   weighted least squares (weights = site pairs per bin). STEP1_RHO and
+#   STEP1_PHI (km) override the estimates (e.g. a range sensitivity run).
+#   Earlier estimate (2008-2019): rho 0.76, phi 46 km.
+# =============================================================================
+env_num  <- function(k, d) { v <- Sys.getenv(k); if (nzchar(v)) as.numeric(v) else d }
+dist_km  <- function(a, b) sqrt(outer(a[, 1], b[, 1], "-")^2 + outer(a[, 2], b[, 2], "-")^2)
+corr_exp <- function(D, phi) exp(-D / phi)
+
+correlogram <- function(r, d, breaks = c(0, 5, 10, 15, 20, 30, 40, 50, 65, 80, 100, 130, 160, 200, 300)) {
+  sm <- d %>% mutate(r = r) %>% group_by(location2) %>%
+    summarise(r = mean(r), x = first(x_km), y = first(y_km), .groups = "drop")
+  D  <- dist_km(as.matrix(sm[, c("x", "y")]), as.matrix(sm[, c("x", "y")]))
+  z  <- (sm$r - mean(sm$r)) / sd(sm$r)
+  ut <- upper.tri(D)
+  tibble(dist = D[ut], prod = outer(z, z)[ut]) %>%
+    filter(dist > 0, dist <= max(breaks)) %>%
+    mutate(bin = cut(dist, breaks)) %>% group_by(bin) %>%
+    summarise(h = mean(dist), pairs = n(), cor = mean(prod), .groups = "drop")
+}
+
+site_xy <- d_fit %>% distinct(location2, x_km, y_km) %>% arrange(location2)
+stopifnot(!anyDuplicated(site_xy$location2))
+trend <- lm(log_CEW ~ 0 + zone_fac + trap_type + year_f + EVI_filled + gdd + corn + cotton + soybeans +
+              tobacco + peanuts + other + zone_fac:(f1 + f2 + f3 + f4), data = d_fit)
+cg_trend <- correlogram(resid(trend), d_fit)
+cfit <- tryCatch(nls(cor ~ rho * exp(-h / phi), data = cg_trend, weights = pairs,
+                     start = list(rho = 0.8, phi = 40)),
+                 error = function(e) { message("Correlogram fit failed (", conditionMessage(e),
+                                               "); using rho 0.76, phi 46 km"); NULL })
+sp_est  <- if (is.null(cfit)) c(rho = 0.76, phi = 46) else coef(cfit)
+sp_rho  <- env_num("STEP1_RHO", sp_est[["rho"]])
+sp_phi  <- env_num("STEP1_PHI", sp_est[["phi"]])
+stopifnot(sp_rho > 0, sp_rho < 1, sp_phi > 0)
+message(sprintf("Spatial site effect: %d sites; correlogram rho = %.2f, phi = %.0f km; using rho = %.2f, phi = %.0f km",
+                nrow(site_xy), sp_est[["rho"]], sp_est[["phi"]], sp_rho, sp_phi))
+
+# K over the fitting sites, rows/columns named by location2 (brms matches the
+# names to the levels of location2)
+K_sites <- local({
+  XY <- as.matrix(site_xy[, c("x_km", "y_km")])
+  K  <- sp_rho * corr_exp(dist_km(XY, XY), sp_phi) + (1 - sp_rho) * diag(nrow(XY))
+  dimnames(K) <- list(site_xy$location2, site_xy$location2)
+  K
+})
+
+# Held-out sites never fit would get an independent N(0, sd_site) draw from
+# brms (allow_new_levels ignores K); flag them
+new_test_sites <- setdiff(unique(d_test$location2), site_xy$location2)
+if (length(new_test_sites))
+  message(length(new_test_sites), " held-out site(s) not in the fitting years: their spatial ",
+          "effect is drawn independently, not kriged")
+
 # Priors (weakly informative; covariates and f's have unit sd)
 #   b ~ N(0, 1): one sd of a covariate moves log(CEW + 1) by < ~2
 #   zone intercepts ~ N(0, 3); sigma, sd_year ~ half-t(3, 0, 1)
-#   seasonal curve g_k ~ N(0, 2): allows a seasonal swing of several log units
-#   zone deviations sd_k ~ half-t(3, 0, 0.5): three zones barely inform an sd,
-#   so deviations are kept to fractions of the shared curve
+#   seasonal curve g_k ~ N(0, 2): allows a seasonal swing of several log units.
+#   zone_fac:(f1..f4) is coded against the reference zone (0, Northern limits),
+#   because f1..f4 are in the model too: f_k = the Northern curve, and
+#   zone_fac1:f_k, zone_fac2:f_k = how the Transitional / Southern curves
+#   differ from it (the default b ~ N(0, 1), shrinking toward a shared shape).
+#   Fixed effects, not random: three zones can't inform a standard deviation,
+#   and the random version (|| zone_fac) sampled very slowly.
+#   sd_site ~ half-t(3, 0, 1), like sd_year.
 step1_priors <- function(model) {
   s <- step1_specs[[model]]
   p <- c(prior(normal(0, 1), class = "b"),
@@ -74,25 +162,31 @@ step1_priors <- function(model) {
               prior(normal(0, 0.5), class = "b", dpar = "sigma")))
   if (has_term(model, four_mu[1]))
     p <- c(p, prior(normal(0, 2), class = "b", coef = "f1"), prior(normal(0, 2), class = "b", coef = "f2"),
-           prior(normal(0, 2), class = "b", coef = "f3"), prior(normal(0, 2), class = "b", coef = "f4")
+           prior(normal(0, 2), class = "b", coef = "f3"), prior(normal(0, 2), class = "b", coef = "f4"))
+  if (has_term(model, site_term))
+    p <- c(p, prior(student_t(3, 0, 1), class = "sd", group = "location2"))
   p
 }
 
 # =============================================================================
 # Sampler -------------------------------------------------------------------------
-#   Defaults: 4 chains x 2000 iterations (1000 warmup), thin 4 = 1000 draws.
-#   Enough for these models (no site terms); override with STEP1_ITER etc.
+#   Defaults: 4 chains x 2000 iterations (1000 warmup), thin 4 = 1000 draws;
+#   override with STEP1_ITER etc. Check min_ess_bulk in comparison.csv: the
+#   spatial model (one effect per site) may need longer chains.
 # =============================================================================
 env_int <- function(k, d) as.integer(Sys.getenv(k, d))
 step1_sampler <- list(chains = env_int("STEP1_CHAINS", 4), iter = env_int("STEP1_ITER", 2000),
                       warmup = env_int("STEP1_WARMUP", 1000), thin = env_int("STEP1_THIN", 4),
                       threads = env_int("STEP1_THREADS", 1))
-step1_control <- list(adapt_delta = 0.95, max_treedepth = 12)
+# dense_e: a full mass matrix, adapted in warmup - the seasonal terms, GDD and
+# EVI are correlated, which a diagonal metric handles poorly
+step1_control <- list(adapt_delta = 0.95, max_treedepth = 12, metric = "dense_e")
 
 fit_file <- function(model) file.path(step1_dir, paste0("fit_", model))   # brms adds .rds
 
 fit_step1 <- function(model, data = d_fit, smp = step1_sampler) {
   brm(step1_formula(model), data = droplevels(data), family = gaussian(),
+      data2 = if (has_term(model, site_term)) list(K = K_sites) else NULL,
       prior = step1_priors(model), chains = smp$chains, cores = smp$chains,
       iter = smp$iter, warmup = smp$warmup, thin = smp$thin,
       threads = if (smp$threads > 1) threading(smp$threads) else NULL,

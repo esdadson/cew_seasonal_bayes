@@ -22,7 +22,7 @@ source hpc/r_env.sh                                   # conda (default) or Hazel
 export CEW_DATA=${CEW_DATA:-/rs1/researchers/c/cmjone25/Data}
 export CEW_OUT=${CEW_OUT:-$PWD/covariates}
 export STEP1_HOLDOUT=${STEP1_HOLDOUT:-2020}
-export STEP1_MODELS=${STEP1_MODELS:-"fixed seasonal"}
+export STEP1_MODELS=${STEP1_MODELS:-"fixed seasonal spatial"}
 export STEP1_CHAINS=${STEP1_CHAINS:-4} STEP1_ITER=${STEP1_ITER:-2000}
 export STEP1_WARMUP=${STEP1_WARMUP:-1000} STEP1_THIN=${STEP1_THIN:-4} STEP1_THREADS=${STEP1_THREADS:-1}
 
