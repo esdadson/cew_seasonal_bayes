@@ -9,3 +9,8 @@ desktop.ini
 # Step 1/2 outputs: large binaries stay on Hazel / the laptop (CSVs are small and may be committed)
 results/**/*.rds
 results/**/stan_csv/
+# Archived fits and logs stay local
+archive/**/*.rds
+archive/**/*.log
+# Stray graphics device output
+Rplots.pdf

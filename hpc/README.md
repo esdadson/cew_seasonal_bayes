@@ -238,6 +238,10 @@ Run everything from `cew_seasonal_bayes`.
 
 ## 11. Step 1: fit and compare the weekly models [Hazel]
 
+> **Archived (2026-11-05).** The step 1 model comparison is being rebuilt. The scripts this section
+> describes (`step1_models.R`, `step1_hpc.R`, `step1*.sbatch`, `submit_step1.sh`) are now in
+> `archive/step1_v1/` and no longer run from their old paths. This section will be rewritten for the new comparison.
+
 Step 1 lives in `step1/` and step 2 in `step2/`. The original scripts at the top level are unchanged.
 
 | File | What it does |

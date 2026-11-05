@@ -49,17 +49,24 @@ fig1_map = ggplot() +
   geom_polygon(data = lakes, aes(x = long, y = lat, group = group),
                fill = "#cbdbee", color = "#9c9c9c", linewidth = 0.15) +
   # Unselected sites gray crosses (shape as well as color), selected on top
-  geom_point(data = filter(fig1_sites, !selected), aes(x = longitude, y = latitude, shape = "Not selected"),
+  geom_point(data = filter(fig1_sites, !selected), 
+             aes(x = longitude, y = latitude, shape = "Not selected"),
              color = "gray55", size = 0.6, stroke = 0.3) +
   geom_point(data = filter(fig1_sites, selected) %>% arrange(nyr),
-             aes(x = longitude, y = latitude, color = nyr, shape = "Selected"), size = 1.2, alpha = 0.9) +
+             aes(x = longitude, y = latitude, color = nyr, shape = "Selected"), 
+             size = 1.2, alpha = 0.9) +
   scale_shape_manual(values = c("Selected" = 16, "Not selected" = 4), name = NULL) +
   yrs_scale +
-  guides(shape = guide_legend(order = 2, override.aes = list(size = 1.5, color = c("gray55", "black"))),
-         color = guide_colorbar(order = 1, barheight = unit(25, "mm"), barwidth = unit(3, "mm"))) +
+  guides(shape = guide_legend(order = 2, 
+                              override.aes = list(size = 1.5,
+                                                  color = c("gray55", "black"))),
+         color = guide_colorbar(order = 1, 
+                                barheight = unit(25, "mm"), 
+                                barwidth = unit(3, "mm"))) +
   coord_sf(crs = st_crs(4269), xlim = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
   theme_void(base_size = 8, base_family = fig_font) +
-  theme(legend.text = element_text(size = 7), legend.title = element_text(size = 8),
+  theme(legend.text = element_text(size = 7), 
+        legend.title = element_text(size = 8),
         plot.margin = margin(0, 0, 0, 0))
 
 # Years sampled per site (sites with >= 1 qualifying year); bars < 3 years gray
@@ -80,25 +87,14 @@ fig1_hist = ggplot(fig1_sites %>% filter(nyr > 0) %>% count(nyr),
         axis.line = element_line(linewidth = 0.25), axis.ticks = element_line(linewidth = 0.25),
         plot.margin = margin(12, 5.5, 5.5, 12))
 
-# Data-selection flowchart; numbers computed from the data so they match the fit
-fmt = function(x) format(x, big.mark = ",")
-fig1_flow_txt = c(
-  sprintf("Full Lawton et al. (2022) dataset\nn = %s, sites = %s",
-          fmt(nrow(lawton)), fmt(nrow(distinct(lawton, longitude, latitude)))),
-  sprintf("Analysis sites: 2008\u20132020, east of 105\u00b0W,\n\u2265 5 weeks sampled per year, \u2265 3 such years\nn = %s, site-years = %s, sites = %s",
-          fmt(nrow(d_obs)), fmt(n_distinct(d_obs$loc_year)), fmt(n_distinct(d_obs$location2))))
-fig1_flow = ggplot() +
-  annotate("label", x = 0.5, y = c(0.8, 0.2), label = fig1_flow_txt, size = 7 / .pt,
-           family = fig_font, lineheight = 0.95, linewidth = 0.4,
-           label.padding = unit(2, "mm"), label.r = unit(1.5, "mm")) +
-  annotate("segment", x = 0.5, xend = 0.5, y = 0.66, yend = 0.37, linewidth = 0.4,
-           arrow = arrow(length = unit(1.5, "mm"), type = "closed")) +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
-  theme_void()
-
 fig1 = plot_grid(
-  plot_grid(fig1_flow, fig1_hist, ncol = 2, rel_widths = c(1, 1.15), labels = c("a", "b"),
-            label_size = 9, label_fontfamily = fig_font),
+  plot_grid(fig1_hist, 
+            fig1_map, 
+            ncol = 1, 
+            rel_widths = c(1, 1.15), 
+            labels = c("a", "b"),
+            label_size = 9, 
+            label_fontfamily = fig_font),
   fig1_map, ncol = 1, rel_heights = c(1, 1.45), labels = c("", "c"),
   label_size = 9, label_fontfamily = fig_font)
 

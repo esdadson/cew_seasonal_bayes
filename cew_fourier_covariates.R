@@ -146,22 +146,11 @@ dat6_brms <- dat6 %>% ungroup() %>%
   )
 
 formula_gp <- bf(
-  log_CEW ~ 0 + zone_fac + zone_fac(s1 + c1 + s2 + c2) + 
-    EVI_filled + gdd + 
-    corn + cotton + soybeans + tobacco + peanuts + other + 
-    (0 + s1 + c1 + s2 + c2 || location2) + 
-    gp(lon_scaled, lat_scaled, cov = "exponential") + 
-    (1 | year) + 
-    (1 | trap_type),
-  family = gaussian()
-)
-
-formula_gp <- bf(
   log_CEW ~
     EVI_filled + gdd + 
     corn + cotton + soybeans + tobacco + peanuts + other + 
     (0 + s1 + c1 + s2 + c2 || zone_fac) + 
-    gp(lon_scaled, lat_scaled, cov = "exponential") + 
+    gp(lon_scaled, lat_scaled, k = 20, c = 1.25) + 
     (1 | year) + 
     (1 | trap_type),
   family = gaussian()
@@ -179,14 +168,14 @@ fit_gp2.1 <- brm(
   formula = formula_gp,
   data = dat6_brms,
   prior = priors_gp,
-  chains = 2,
-  iter = 3000,
-  thin = 1,
-  warmup = 2000,
-  control = list(
-    adapt_delta = 0.95
-  ),
-  cores = 2,
+  chains = 4,
+  iter = 15000,
+  thin = 4,
+  warmup = 14000,
+  backend = "cmdstanr", 
+  control = list(adapt_delta = 0.99, 
+                 max_treedepth = 12),
+  cores = 4,
   seed = 42,
   save_pars = save_pars(all = TRUE),
   file = "C:/Users/edadson/Desktop/CEW/brms_fit/fit_gp2.1.rds"
@@ -197,7 +186,6 @@ summary(fit_gp2.1)
 # fitted values
 preds = posterior_predict(fit_gp2.1, 
                           newdata = dat6_brms,
-                          ndraws = 1000,
                           allow_new_levels = TRUE)
 fitted = colMeans(preds)
 fitted_lower = apply(preds, 2, quantile, 0.025)
@@ -226,62 +214,100 @@ for (yr in seq(2008, 2020)) {
   print(mt)
 }
 
-# Test temporal autocorrelation
-year_resid <- dat6_brms %>%
-  group_by(year) %>%
+loc_year_index <- dat6_brms %>%
+  mutate(row_id = row_number()) %>%
+  group_by(loc_year_id, location2, year) %>%
   summarise(
-    mean_resid = mean(resids, na.rm = TRUE),
-    sd_resid   = sd(resids,   na.rm = TRUE),
-    se_resid   = sd_resid / sqrt(n()),
-    .groups    = "drop"
+    row_start = min(row_id),
+    row_end   = max(row_id),
+    n_weeks   = n(),
+    woy_vals  = list(woy),      # actual week numbers
+    .groups   = "drop"
+  ) %>%
+  arrange(loc_year_id)
+
+zone_lookup <- dat6_brms %>%
+  select(loc_year_id, zone_30y, longitude, latitude) %>%
+  distinct()
+
+loc_year_index <- loc_year_index %>%
+  left_join(zone_lookup, by = "loc_year_id")
+
+# ---- Output containers ----
+# Summary table (as before)
+peak_summary <- loc_year_index %>%
+  mutate(
+    peak_week_mean   = NA_real_,
+    peak_week_median = NA_real_,
+    peak_week_sd     = NA_real_,
+    peak_week_lo95   = NA_real_,
+    peak_week_hi95   = NA_real_,
+    peak_week_lo50   = NA_real_,
+    peak_week_hi50   = NA_real_,
+    ci_width         = NA_real_
   )
 
-p_year_trend <- ggplot(year_resid,
-                       aes(x = as.numeric(year),
-                           y = mean_resid)) +
-  geom_hline(yintercept = 0,
-             linetype = "dashed",
-             color    = "grey50") +
-  geom_ribbon(aes(ymin = mean_resid - 1.96 * se_resid,
-                  ymax = mean_resid + 1.96 * se_resid),
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(color = "steelblue", linewidth = 1) +
-  geom_point(size = 3, color = "steelblue") +
-  geom_smooth(method = "lm", se = FALSE,
-              color  = "tomato",
-              linetype = "dashed") +
-  labs(
-    title    = "Mean residual by year",
-    x        = "Year",
-    y        = "Mean residual"
-  ) +
-  theme_minimal()
+# Raw draws list — one element per loc:year
+# Each element is a vector of length n_draws
+N_loc_year = n_distinct(dat6_brms$loc_year_id)
+peak_draws_list <- vector("list", N_loc_year)
 
-# ---- Week-of-year mean residuals ----
-woy_resid <- dat6_brms %>%
-  group_by(woy) %>%
-  summarise(
-    mean_resid = mean(resids, na.rm = TRUE),
-    se_resid   = sd(resids,   na.rm = TRUE) / sqrt(n()),
-    .groups    = "drop"
-  )
+cat("Processing", N_loc_year, "loc:year groups...\n")
+t_start <- proc.time()
 
-p_woy_trend <- ggplot(woy_resid,
-                      aes(x = woy, y = mean_resid)) +
-  geom_hline(yintercept = 0,
-             linetype = "dashed", color = "grey50") +
-  geom_ribbon(aes(ymin = mean_resid - 1.96 * se_resid,
-                  ymax = mean_resid + 1.96 * se_resid),
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(color = "steelblue", linewidth = 1) +
-  labs(
-    title    = "Mean residual by week of year",
-    x        = "Week of year",
-    y        = "Mean residual"
-  ) +
-  theme_minimal()
+for (j in seq_len(N_loc_year)) {
+  
+  # ---- Column indices for this loc:year ----
+  idx  <- loc_year_index$row_start[j]:loc_year_index$row_end[j]
+  woys <- loc_year_index$woy_vals[[j]]
+  
+  # ---- Subset preds ----
+  pred_j     <- preds[, idx, drop = FALSE]
+  peak_draws <- woys[apply(pred_j, 1, which.max)]
+  
+  # ---- Store raw draws ----
+  peak_draws_list[[j]] <- peak_draws
+  
+  # ---- Summary statistics ----
+  peak_summary$peak_week_mean[j]   <- mean(peak_draws)
+  peak_summary$peak_week_median[j] <- median(peak_draws)
+  peak_summary$peak_week_sd[j]     <- sd(peak_draws)
+  peak_summary$peak_week_lo95[j]   <- quantile(peak_draws, 0.025)
+  peak_summary$peak_week_hi95[j]   <- quantile(peak_draws, 0.975)
+  peak_summary$peak_week_lo50[j]   <- quantile(peak_draws, 0.25)
+  peak_summary$peak_week_hi50[j]   <- quantile(peak_draws, 0.75)
+  peak_summary$ci_width[j]         <- quantile(peak_draws, 0.975) -
+    quantile(peak_draws, 0.025)
+  
+  if (j %% 100 == 0) {
+    elapsed <- round((proc.time() - t_start)["elapsed"], 1)
+    eta     <- round(elapsed / j * (N_loc_year - j), 0)
+    cat("  ", j, "/", N_loc_year,
+        "| elapsed:", elapsed, "s",
+        "| ETA:", eta, "s\n")
+  }
+}
 
-p_year_trend | p_woy_trend
+cat("Done in",
+    round((proc.time() - t_start)["elapsed"], 1), "s\n")
+
+# ---- Flatten draws into long data frame ----
+# One row per (loc:year x draw)
+peak_draws_long <- map_dfr(
+  seq_len(N_loc_year),
+  function(j) {
+    tibble(
+      loc_year_fac = loc_year_index$loc_year_fac[j],
+      location     = loc_year_index$location[j],
+      year         = loc_year_index$year[j],
+      zone_30y     = loc_year_index$zone_30y[j],
+      draw_id      = seq_along(peak_draws_list[[j]]),
+      peak_week    = peak_draws_list[[j]]
+    )
+  }
+)
+
+peak_sf = peak_summary %>% st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
 
 # Stan version of the code 
 stan_data = standata(dat6_brms)
