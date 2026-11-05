@@ -36,7 +36,7 @@ d_test  <- if (is.na(holdout)) d_obs[0, ] else filter(d_obs, year == holdout)
 # =============================================================================
 year_term <- "(1 | year_f)"
 covs      <- "EVI_filled + gdd + corn + cotton + soybeans + tobacco + peanuts + other"
-four_mu   <- c("f1 + f2 + f3 + f4", "(0 + f1 + f2 + f3 + f4 || zone_fac)")
+four_mu   <- c("f1 + f2 + f3 + f4", "zone_fac:(f1 + f2 + f3 + f4)")
 
 terms_fixed <- c("0 + zone_fac + trap_type", year_term, covs)
 step1_specs <- list(
