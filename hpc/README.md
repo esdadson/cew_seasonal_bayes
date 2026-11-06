@@ -242,17 +242,26 @@ Run everything from `cew_seasonal_bayes`.
 > describes (`step1_models.R`, `step1_hpc.R`, `step1*.sbatch`, `submit_step1.sh`) are now in
 > `archive/step1_v1/` and no longer run from their old paths. This section will be rewritten for the new comparison.
 >
-> **Current comparison (fixed, seasonal, spatial):** one job fits the three models in turn.
+> **Current comparison (fixed, seasonal, spatial):** `seasonal` has zone curves as random
+> deviations `(0 + f1 + f2 + f3 + f4 || zone_fac)` from a shared curve; `spatial` adds an exact
+> GP, `gp(longitude, latitude, cov = "exponential", gr = TRUE, iso = TRUE, scale = TRUE)`
+> (needs brms >= 2.22 in the conda env). The GP takes days, so each model is its own job, with
+> its own time limit, plus a comparison job that runs once they have all ended.
 > ```bash
-> git pull                                   # get step1/step1_models.R, step1_compare.R, hpc/step1_compare.sbatch
-> sbatch hpc/step1_compare.sbatch            # "Submitted batch job <jobid>"
-> tail -f logs/step1_compare.<jobid>.out     # Ctrl-C stops watching only
+> git pull
+> sinfo -p compute -o "%P %l"                # partition time limit; spatial asks for 3 days
+> bash hpc/submit_step1_compare.sh           # prints the four job ids and log names
+> squeue -u $USER
+> tail -f logs/step1_spatial.<jobid>.out     # Ctrl-C stops watching only
 > seff <jobid>                               # time and memory used, after it ends
+> STEP1_MODELS=spatial bash hpc/submit_step1_compare.sh   # rerun one model; others are reused
 > ```
-> Results land in `results/step1/` (comparison.csv, test_rows.csv, coverage_by_season.csv,
-> spatial_range.csv, time_estimates.csv and two PNGs). `time_estimates.csv` projects the final
-> all-years fit from the measured timings; compare `fit_wall_min` in comparison.csv between the
-> laptop and Hazel to rescale it.
+> Results land in `results/step1/`: comparison.csv, test_rows.csv, holdout_zone_week.csv,
+> coverage_by_season.csv, spatial_range.csv, time_estimates.csv, holdout_ribbon.png (2020
+> zone weekly means with 95% credible and predictive ribbons, zones x models),
+> holdout_zone_week.png and coverage_by_season.png. `time_estimates.csv` projects the final
+> all-years fit from the measured timings. In comparison.csv, check `pct_max_treedepth`,
+> `max_rhat` and `min_ess_bulk` before comparing elpd; `gp_range_km` is the GP length-scale in km.
 > Copy them to the laptop with `scp -r <unityID>@login.hpc.ncsu.edu:cew_seasonal_bayes/results/step1 results/`.
 
 Step 1 lives in `step1/` and step 2 in `step2/`. The original scripts at the top level are unchanged.

@@ -12,29 +12,32 @@
 #  seasonal : fixed + sum_k f_k(w) (g_k + g_zk)
 #             f_1..f_4 = 2-harmonic Fourier basis of week, orthogonalised
 #             (step1_data.R section 5: f1, f2 span the first harmonic, f3, f4
-#             add the second); g_k = the Northern-limits curve, g_zk (fixed,
-#             z = Transitional, Southern) = each zone's difference from it:
-#             one curve per zone, 12 coefficients
-#  spatial  : seasonal + v_i, a spatially correlated site effect (exact GP
-#             over the monitored sites with a fixed range):
-#               v ~ N(0, sd_site^2 K),  K = rho C + (1 - rho) I,
-#               C_ij = exp(-d_ij / phi),  d = CONUS Albers km between sites
-#             rho (spatial share) and phi (range) are estimated once from the
-#             correlogram of site-mean residuals (section "Spatial site
-#             effect") and held fixed, so the model adds ONE parameter
-#             (sd_site), samples like an independent site intercept, and an
-#             unmonitored location can be kriged from its lon/lat:
-#               v0 | v ~ N(rho c0' K^-1 v, sd_site^2 (1 - rho^2 c0' K^-1 c0))
-#  spatial_gp : seasonal + gp(longitude, latitude, gr = TRUE, iso = TRUE,
-#             scale = TRUE), brms' exact GP (no k): computed over the unique
-#             site coordinates (gr), one length-scale for both axes (iso),
-#             coordinates scaled so the largest distance is 1 (scale);
-#             squared-exponential kernel (brms default). Estimates sd_gp and
-#             the length-scale (brms' default priors) plus one latent value
-#             per site. Cost per gradient grows with sites^3.
+#             add the second); g_k = the curve shared by all zones (fixed),
+#             g_zk ~ N(0, sd_k^2) = each zone's deviation from it, uncorrelated
+#             across k: (0 + f1 + f2 + f3 + f4 || zone_fac). 4 fixed + 4 sd
+#             + 12 deviations; the sd's shrink the zone curves toward the
+#             shared one instead of the collinear zone_fac:(f1..f4) fixed
+#             interactions.
+#  spatial  : seasonal + g(s_i), a GP over site coordinates:
+#               gp(longitude, latitude, cov = "exponential", gr = TRUE,
+#                  iso = TRUE, scale = TRUE)
+#             brms' exact GP (no k), over the unique site coordinates (gr),
+#             one length-scale for both axes (iso), coordinates scaled so the
+#             largest distance is 1 (scale); kernel sd_gp^2 exp(-d / lscale),
+#             the same shape as the correlogram fit below. Estimates sd_gp,
+#             lscale and one latent value per site (~422); cost per gradient
+#             grows with sites^3. A new location is kriged by brms
+#             (posterior_epred with newdata). Needs brms >= 2.22.
 #             Note: in degrees, 1 deg of longitude (~80-95 km here) is shorter
 #             than 1 deg of latitude (111 km), so iso = TRUE is only
 #             approximately isotropic; x_km, y_km would be exact.
+#  spatial_k: fallback, not in the default run: seasonal + v_i, a site effect
+#             with a FIXED spatial correlation:
+#               v ~ N(0, sd_site^2 K),  K = rho C + (1 - rho) I,
+#               C_ij = exp(-d_ij / phi),  d = CONUS Albers km between sites
+#             rho and phi from the correlogram of site-mean residuals, held
+#             fixed: one extra parameter (sd_site). Kriging:
+#               v0 | v ~ N(rho c0' K^-1 v, sd_site^2 (1 - rho^2 c0' K^-1 c0))
 #  Later (not yet fit): seasonal sigma (sigma ~ f1 + f2).
 #  A model is list(mu = <terms>, sigma = <terms or NULL>).
 # =============================================================================
@@ -57,18 +60,19 @@ d_test  <- if (is.na(holdout)) d_obs[0, ] else filter(d_obs, year == holdout)
 # =============================================================================
 year_term <- "(1 | year_f)"
 covs      <- "EVI_filled + gdd + corn + cotton + soybeans + tobacco + peanuts + other"
-four_mu   <- c("f1 + f2 + f3 + f4", "zone_fac:(f1 + f2 + f3 + f4)")
+four_mu   <- c("f1 + f2 + f3 + f4", "(0 + f1 + f2 + f3 + f4 || zone_fac)")
 
+gp_term   <- 'gp(longitude, latitude, cov = "exponential", gr = TRUE, iso = TRUE, scale = TRUE)'
 site_term <- "(1 | gr(location2, cov = K))"
-gp_term   <- "gp(longitude, latitude, gr = TRUE, iso = TRUE, scale = TRUE)"
 
 terms_fixed <- c("0 + zone_fac + trap_type", year_term, covs)
 step1_specs <- list(
-  fixed    = list(mu = terms_fixed),
-  seasonal = list(mu = c(terms_fixed, four_mu)),
-  spatial  = list(mu = c(terms_fixed, four_mu, site_term)),
-  spatial_gp = list(mu = c(terms_fixed, four_mu, gp_term))
+  fixed     = list(mu = terms_fixed),
+  seasonal  = list(mu = c(terms_fixed, four_mu)),
+  spatial   = list(mu = c(terms_fixed, four_mu, gp_term)),
+  spatial_k = list(mu = c(terms_fixed, four_mu, site_term))     # fallback, not run by default
 )
+step1_default_models <- c("fixed", "seasonal", "spatial")
 
 has_term <- function(model, term) term %in% step1_specs[[model]]$mu
 step1_formula <- function(model) {
@@ -132,24 +136,44 @@ K_sites <- local({
   K
 })
 
-# Held-out sites never fit would get an independent N(0, sd_site) draw from
-# brms (allow_new_levels ignores K); flag them
+# spatial_k only: held-out sites never fit would get an independent
+# N(0, sd_site) draw from brms (allow_new_levels ignores K); flag them. The GP
+# (spatial) kriges them from their coordinates.
 new_test_sites <- setdiff(unique(d_test$location2), site_xy$location2)
 if (length(new_test_sites))
-  message(length(new_test_sites), " held-out site(s) not in the fitting years: their spatial ",
-          "effect is drawn independently, not kriged")
+  message(length(new_test_sites), " held-out site(s) not in the fitting years: spatial_k draws ",
+          "their effect independently; the GP kriges them")
+
+# GP length-scale on brms' scale (scale = TRUE divides lon/lat by the largest
+# distance between fitting sites, in degrees). km_per_unit converts lscale to
+# km (via the median km per degree over site pairs < 200 km apart); gp_ls0 is
+# the correlogram range phi on that scale, the centre of the lscale prior.
+gp_scale <- local({
+  ll  <- d_fit %>% distinct(location2, longitude, latitude, x_km, y_km)
+  Dd  <- dist_km(as.matrix(ll[, c("longitude", "latitude")]), as.matrix(ll[, c("longitude", "latitude")]))
+  Dk  <- dist_km(as.matrix(ll[, c("x_km", "y_km")]), as.matrix(ll[, c("x_km", "y_km")]))
+  nr  <- upper.tri(Dk) & Dk > 0 & Dk < 200
+  km_per_deg <- median(Dk[nr] / Dd[nr])
+  c(dmax_deg = max(Dd), km_per_deg = km_per_deg, km_per_unit = max(Dd) * km_per_deg)
+})
+gp_ls0 <- sp_phi / gp_scale[["km_per_unit"]]
+message(sprintf("GP coordinates: largest distance %.1f deg (~%.0f km); phi %.0f km = lscale %.3f",
+                gp_scale[["dmax_deg"]], gp_scale[["km_per_unit"]], sp_phi, gp_ls0))
 
 # Priors (weakly informative; covariates and f's have unit sd)
 #   b ~ N(0, 1): one sd of a covariate moves log(CEW + 1) by < ~2
 #   zone intercepts ~ N(0, 3); sigma, sd_year ~ half-t(3, 0, 1)
-#   seasonal curve g_k ~ N(0, 2): allows a seasonal swing of several log units.
-#   zone_fac:(f1..f4) is coded against the reference zone (0, Northern limits),
-#   because f1..f4 are in the model too: f_k = the Northern curve, and
-#   zone_fac1:f_k, zone_fac2:f_k = how the Transitional / Southern curves
-#   differ from it (the default b ~ N(0, 1), shrinking toward a shared shape).
-#   Fixed effects, not random: three zones can't inform a standard deviation,
-#   and the random version (|| zone_fac) sampled very slowly.
-#   sd_site ~ half-t(3, 0, 1), like sd_year.
+#   shared seasonal curve g_k ~ N(0, 2): allows a seasonal swing of several
+#   log units. Zone deviations: sd_k ~ half-t(3, 0, 0.5). Three zones carry
+#   little information about an sd, so this prior matters: it keeps the
+#   deviations to about a log unit unless the data insist.
+#   GP (spatial): sd_gp ~ half-t(3, 0, 1); lscale ~ lognormal(log(gp_ls0), 1),
+#   centred on the correlogram range phi (~46 km), 95% within phi / 7 to
+#   phi x 7. brms' default lscale prior allows ranges up to the whole region,
+#   and the squared-exponential test went to ~1000 km, where the GP competes
+#   with the zone intercepts and curves; the zone terms carry the large-scale
+#   pattern, the GP the local one. STEP1_GP_PRIOR=default uses brms' defaults.
+#   sd_site (spatial_k) ~ half-t(3, 0, 1), like sd_year.
 step1_priors <- function(model) {
   s <- step1_specs[[model]]
   p <- c(prior(normal(0, 1), class = "b"),
@@ -163,6 +187,12 @@ step1_priors <- function(model) {
   if (has_term(model, four_mu[1]))
     p <- c(p, prior(normal(0, 2), class = "b", coef = "f1"), prior(normal(0, 2), class = "b", coef = "f2"),
            prior(normal(0, 2), class = "b", coef = "f3"), prior(normal(0, 2), class = "b", coef = "f4"))
+  if (has_term(model, four_mu[2]))
+    p <- c(p, prior(student_t(3, 0, 0.5), class = "sd", group = "zone_fac"))
+  if (has_term(model, gp_term) && Sys.getenv("STEP1_GP_PRIOR") != "default")
+    p <- c(p, prior(student_t(3, 0, 1), class = "sdgp"),
+           set_prior(sprintf("lognormal(%.4f, 1)", log(gp_ls0)), class = "lscale",
+                     coef = "gplongitudelatitude"))
   if (has_term(model, site_term))
     p <- c(p, prior(student_t(3, 0, 1), class = "sd", group = "location2"))
   p
@@ -185,6 +215,9 @@ step1_control <- list(adapt_delta = 0.95, max_treedepth = 12, metric = "dense_e"
 fit_file <- function(model) file.path(step1_dir, paste0("fit_", model))   # brms adds .rds
 
 fit_step1 <- function(model, data = d_fit, smp = step1_sampler) {
+  if (has_term(model, gp_term) &&
+      !isTRUE(tryCatch(is.list(gp(longitude, latitude, cov = "exponential")), error = function(e) FALSE)))
+    stop("This brms (", packageVersion("brms"), ") has no exponential GP kernel; install brms >= 2.22")
   brm(step1_formula(model), data = droplevels(data), family = gaussian(),
       data2 = if (has_term(model, site_term)) list(K = K_sites) else NULL,
       prior = step1_priors(model), chains = smp$chains, cores = smp$chains,
@@ -202,6 +235,8 @@ sampler_stats <- function(fit, model, smp = step1_sampler) {
   et <- rstan::get_elapsed_time(fit$fit)                       # chains x (warmup, sample), s
   sm <- summarise_draws(as_draws_df(fit), "rhat", "ess_bulk", "ess_tail")
   steps <- mean(v("n_leapfrog__"))
+  ls    <- grep("^lscale_", sm$variable, value = TRUE)          # GP range, km (median)
+  gp_km <- if (length(ls)) median(as_draws_df(fit, variable = ls[1])[[ls[1]]]) * gp_scale[["km_per_unit"]] else NA
   data.frame(model = model,
              warmup_min = mean(et[, 1]) / 60, sampling_min = mean(et[, 2]) / 60,
              steps_per_iter = steps,
@@ -211,7 +246,8 @@ sampler_stats <- function(fit, model, smp = step1_sampler) {
              max_rhat = max(sm$rhat, na.rm = TRUE),
              min_ess_bulk = min(sm$ess_bulk, na.rm = TRUE),
              min_ess_tail = min(sm$ess_tail, na.rm = TRUE),
-             worst = sm$variable[which.min(sm$ess_bulk)])
+             worst = sm$variable[which.min(sm$ess_bulk)],
+             gp_range_km = gp_km)
 }
 
 # =============================================================================
@@ -254,7 +290,13 @@ sigma_rows <- function(fit, model, nd) {
 #   the held-out mean, cov90 = share inside the 90% predictive interval,
 #   overall and by season block (cov90 per block shows whether a constant
 #   sigma is too wide off-season and too narrow at the peak).
+#   Held-out ribbons (ci_level, 95%): per trap-week, ci_lo / ci_hi = credible
+#   interval of E[y]; per zone and week, the mean over that zone-week's traps
+#   computed per draw, of E[y] (credible interval of the zone weekly mean)
+#   and of a predictive draw y_rep (interval the observed zone mean should
+#   fall in).
 # =============================================================================
+ci_level <- 0.95
 season_block <- function(woy) cut(woy, c(0, 22, 27, 32, 37, 53),
                                   labels = c("<=22", "23-27", "28-32", "33-37", ">=38"))
 
@@ -271,7 +313,7 @@ step1_metrics <- function(fit, model, lo) {
                   bayes_R2 = br2[1, "Estimate"], loo_R2 = lr2[1, "Estimate"],
                   mae_train = mean(abs(y - mu)), rmse_train = sqrt(mean((y - mu)^2)),
                   mae_loo = mean(abs(y - mu_loo)))
-  if (!nrow(d_test)) return(list(metrics = m, test_rows = NULL))
+  if (!nrow(d_test)) return(list(metrics = m, test_rows = NULL, zone_week = NULL))
 
   et  <- epred_rows(fit, model, d_test)
   sg  <- sigma_rows(fit, model, d_test)
@@ -279,8 +321,28 @@ step1_metrics <- function(fit, model, lo) {
   Y   <- matrix(yt, nrow(et), ncol(et), byrow = TRUE)
   lpd <- matrixStats::colLogSumExps(dnorm(Y, et, sg, log = TRUE)) - log(nrow(et))
   set.seed(42)
-  pi90 <- matrixStats::colQuantiles(et + sg * matrix(rnorm(length(et)), nrow(et)), probs = c(0.05, 0.95))
+  yrep <- et + sg * matrix(rnorm(length(et)), nrow(et))
+  rm(sg)
+  pi90 <- matrixStats::colQuantiles(yrep, probs = c(0.05, 0.95))
+  pr   <- c((1 - ci_level) / 2, 1 - (1 - ci_level) / 2)
+  ci   <- matrixStats::colQuantiles(et, probs = pr)
   mt  <- colMeans(et)
+
+  # zone x week means per draw: A averages a zone-week's rows (rows x groups)
+  g  <- droplevels(interaction(d_test$zone_30y, d_test$woy, lex.order = TRUE))
+  A  <- model.matrix(~ 0 + g)
+  A  <- sweep(A, 2, colSums(A), "/")
+  em <- et %*% A; ym <- yrep %*% A
+  rm(yrep)
+  zone_week <- d_test %>% mutate(g = g) %>% group_by(g) %>%
+    summarise(zone_30y = first(zone_30y), woy = first(woy), n = n(), obs = mean(log_CEW),
+              .groups = "drop") %>%
+    arrange(g) %>% select(-g) %>%
+    mutate(model = model, year = holdout, pred_mean = colMeans(em),
+           ci_lo = matrixStats::colQuantiles(em, probs = pr[1]),
+           ci_hi = matrixStats::colQuantiles(em, probs = pr[2]),
+           pi_lo = matrixStats::colQuantiles(ym, probs = pr[1]),
+           pi_hi = matrixStats::colQuantiles(ym, probs = pr[2]), level = ci_level)
   m <- cbind(m, data.frame(n_test = length(yt), elpd_test = sum(lpd),
                            elpd_test_se = sd(lpd) * sqrt(length(lpd)),
                            mae_test = mean(abs(yt - mt)), rmse_test = sqrt(mean((yt - mt)^2)),
@@ -288,7 +350,7 @@ step1_metrics <- function(fit, model, lo) {
                            cov90_test = mean(yt >= pi90[, 1] & yt <= pi90[, 2])))
   test_rows <- d_test %>%
     select(location2, loc_year, zone_30y, year, woy, log_CEW) %>%
-    mutate(model = model, pred_mean = mt, pi_lo = pi90[, 1], pi_hi = pi90[, 2], lpd = lpd,
-           block = season_block(woy))
-  list(metrics = m, test_rows = test_rows)
+    mutate(model = model, pred_mean = mt, ci_lo = ci[, 1], ci_hi = ci[, 2],
+           pi_lo = pi90[, 1], pi_hi = pi90[, 2], lpd = lpd, block = season_block(woy))
+  list(metrics = m, test_rows = test_rows, zone_week = zone_week)
 }

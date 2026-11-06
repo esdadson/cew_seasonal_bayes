@@ -5,15 +5,22 @@
 # and two diagnostic figures. Runs on the laptop (no site terms yet).
 #
 #   Rscript step1/step1_compare.R
-#   STEP1_MODELS="fixed seasonal"   models to run (default: all in step1_specs)
+#   STEP1_MODELS="fixed seasonal"   models to run (default: fixed seasonal spatial)
 #   STEP1_CHAINS / STEP1_ITER / STEP1_WARMUP / STEP1_THIN / STEP1_THREADS
+#   STEP1_REUSE_ONLY=1   fit nothing: build the outputs from the models that
+#                        already have results (hpc/submit_step1_compare.sh runs
+#                        each model as its own job, then this)
 #
 # One model is in memory at a time; each model's results are cached in
 # results/step1/check_<model>.rds and reused while the fit is unchanged.
 #
 # Outputs (results/step1/):
 #   comparison.csv          loo_compare + metrics + sampler stats, one row per model
-#   test_rows.csv           2020 predictions per trap-week and model
+#   test_rows.csv           2020 predictions per trap-week and model (mean,
+#                           95% credible interval, 90% predictive interval)
+#   holdout_zone_week.csv   2020 zone weekly means: observed, predicted, 95%
+#                           credible and predictive intervals, per model
+#   holdout_ribbon.png      the same as ribbons, zones x models
 #   coverage_by_season.csv  2020 90% interval coverage and MAE by season block
 #   holdout_zone_week.png   2020 zone weekly means: observed vs each model
 #   coverage_by_season.png  2020 coverage by season block (target 0.90)
@@ -26,8 +33,9 @@
 source("step1/step1_models.R")
 library(ggplot2)
 
-models <- strsplit(Sys.getenv("STEP1_MODELS", paste(names(step1_specs), collapse = " ")), "\\s+")[[1]]
+models <- strsplit(trimws(Sys.getenv("STEP1_MODELS", paste(step1_default_models, collapse = " "))), "\\s+")[[1]]
 stopifnot(all(models %in% names(step1_specs)))
+reuse_only <- Sys.getenv("STEP1_REUSE_ONLY") %in% c("1", "true", "TRUE")
 check_file <- function(m) file.path(step1_dir, paste0("check_", m, ".rds"))
 mins <- function(t0) as.numeric(difftime(Sys.time(), t0, units = "mins"))
 
@@ -38,10 +46,12 @@ for (m in models) {
   ff <- paste0(fit_file(m), ".rds")
   if (file.exists(check_file(m)) && file.exists(ff) && file.mtime(check_file(m)) > file.mtime(ff)) {
     ck <- readRDS(check_file(m))
-    if ("post_min" %in% names(ck$stats)) {         # older check files lack the timings
+    # older check files lack the timings or the zone-week ribbons
+    if ("post_min" %in% names(ck$stats) && (!nrow(d_test) || !is.null(ck$zone_week))) {
       message("Reusing ", check_file(m)); res[[m]] <- ck; next
     }
   }
+  if (reuse_only) { message("No results for ", m, " (STEP1_REUSE_ONLY): skipped"); next }
   message("\n==== ", m, " ====\n", deparse1(step1_formula(m)$formula))
   t0  <- Sys.time()
   fit <- fit_step1(m)
@@ -55,11 +65,13 @@ for (m in models) {
   st$draws    <- ndraws(fit)
   st$iter     <- step1_sampler$iter; st$warmup <- step1_sampler$warmup; st$chains <- step1_sampler$chains
   res[[m]] <- list(stats = st, loo = lo, metrics = mt$metrics, test_rows = mt$test_rows,
-                   fixef = fixef(fit), vc = VarCorr(fit))
+                   zone_week = mt$zone_week, fixef = fixef(fit), vc = VarCorr(fit))
   saveRDS(res[[m]], check_file(m))
   print(summary(fit))
   rm(fit, lo, mt); invisible(gc())
 }
+if (!length(res)) stop("No model results in ", step1_dir)
+models <- names(res)
 
 # ---- Comparison table -------------------------------------------------------------
 tab <- bind_rows(lapply(res, function(r) left_join(r$metrics, r$stats, by = "model")))
@@ -71,7 +83,8 @@ if (length(res) > 1) {
 write.csv(tab, file.path(step1_dir, "comparison.csv"), row.names = FALSE)
 show <- intersect(c("model", "elpd_diff", "se_diff", "elpd_loo", "p_loo", "loo_R2", "mae_loo",
                     "elpd_test", "mae_test", "R2_test", "cov90_test",
-                    "fit_wall_min", "divergent", "max_rhat", "min_ess_bulk"), names(tab))
+                    "fit_wall_min", "divergent", "pct_max_treedepth", "max_rhat", "min_ess_bulk",
+                    "gp_range_km"), names(tab))
 print(tab[show], digits = 3)
 
 # ---- Spatial range used by the spatial model -----------------------------------------
@@ -139,5 +152,31 @@ if (nrow(tr)) {
          subtitle = paste0(holdout, " (held out): coverage by season block")) +
     theme_bw(base_size = 9)
   ggsave(file.path(step1_dir, "coverage_by_season.png"), p2, width = 5, height = 3, dpi = 200)
+
+  # Ribbons: dark = 95% credible interval of the zone weekly mean (where the
+  # model puts the mean); light = 95% predictive interval of the observed
+  # zone mean (adds trap-week noise); points = observed zone weekly means
+  zwr <- bind_rows(lapply(res, `[[`, "zone_week"))
+  write.csv(zwr, file.path(step1_dir, "holdout_zone_week.csv"), row.names = FALSE)
+  zwr <- zwr %>% mutate(zone = factor(zone_lab[as.character(zone_30y)], zone_lab),
+                        model = factor(model, models))
+  lv  <- paste0(100 * zwr$level[1], "%")
+  p3 <- ggplot(zwr, aes(woy)) +
+    geom_ribbon(aes(ymin = pi_lo, ymax = pi_hi, fill = "pred"), alpha = 0.35) +
+    geom_ribbon(aes(ymin = ci_lo, ymax = ci_hi, fill = "cred"), alpha = 0.7) +
+    geom_line(aes(y = pred_mean), colour = "#08306B", linewidth = 0.5) +
+    geom_point(aes(y = obs), size = 0.7, colour = "grey15") +
+    facet_grid(zone ~ model) +
+    scale_fill_manual(values = c(cred = "#6BAED6", pred = "#C6DBEF"),
+                      breaks = c("cred", "pred"),
+                      labels = c(paste(lv, "credible interval (mean)"),
+                                 paste(lv, "predictive interval (observed mean)")),
+                      name = NULL) +
+    labs(x = "Week of year", y = "Mean log(CEW + 1)",
+         subtitle = paste0(holdout, " (held out): zone weekly means, observed (points) vs predicted")) +
+    guides(fill = guide_legend(ncol = 1)) +
+    theme_bw(base_size = 9) + theme(legend.position = "bottom")
+  ggsave(file.path(step1_dir, "holdout_ribbon.png"), p3,
+         width = max(5, 2.2 * length(models) + 1), height = 6.5, dpi = 300)
 }
 message("Done. Outputs in ", step1_dir)

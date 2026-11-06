@@ -11,7 +11,8 @@
 # Step 1 model comparison (step1/step1_compare.R): fits each model in
 # STEP1_MODELS to 2008-2019, one after another, scores them with PSIS-LOO and
 # on the held-out year, and writes results/step1/.
-#   sbatch hpc/step1_compare.sbatch                          # all models, defaults
+# The spatial GP needs days, not 6 h: use bash hpc/submit_step1_compare.sh, which
+# submits this script once per model (own time limit) plus a comparison job.
 #   STEP1_MODELS=fixed sbatch hpc/step1_compare.sbatch       # one model
 #   STEP1_ITER=4000 STEP1_WARMUP=2000 STEP1_THIN=8 sbatch hpc/step1_compare.sbatch
 # Resubmitting reuses finished models (results/step1/check_<model>.rds).
