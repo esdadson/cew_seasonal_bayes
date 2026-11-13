@@ -5,20 +5,22 @@
 #
 # Three nested Gaussian models of y = log(CEW + 1), site i, year t, week w:
 #
-#   fixed          y = b0 + trap + x' beta + e
+#   fixed          y = b0 + zone + trap + x' beta + e
 #   fourier        fixed + sum_h [c_h cos(2 pi h w/52) + s_h sin(2 pi h w/52)]
 #                        + u_t                                   (year intercept)
-#   spatiotemporal fourier + g_i + v_i                           (site intercept:
-#                                                                 spatial + independent)
+#   spatiotemporal fourier + g_i                                 (spatial site intercept)
 #                        + a_i cos(2 pi w/52) + b_i sin(2 pi w/52)  (spatial site slopes:
 #                                                                 each site's peak shifts)
 #                        + e AR(1) over weeks within each site-year
 #
-#   x   weekly EVI and GDD, six crop shares (standardised); trap = BL / BL_PH / PH
+#   zone  fixed intercept shift (Transitional, Northern against Southern); it
+#         moves a zone's level, not its timing: the seasonal curve is shared
+#   x     weekly EVI and GDD, six crop shares (standardised); trap = BL / BL_PH / PH
 #   Harmonics h = 1..STAN_HARM (at most 2). g, a, b ~ MVN(0, sigma^2 C), C a
 #   Matern 3/2 correlation between the raw site locations with one range.
 #
-# Zones are not in any model; they are used only to summarise peak weeks.
+# Peak-week timing by zone comes from the site slopes a, b (spatiotemporal) and
+# the covariates; zones are also used to summarise the predicted peak weeks.
 #
 # Environment:
 #   STAN_HARM         harmonics in the shared seasonal curve (1 or 2)     2
@@ -88,17 +90,19 @@ win <- c(floor(pw[1]), ceiling(pw[2]))
 
 # =============================================================================
 # Design matrices ------------------------------------------------------------------
-#    fixed: Intercept, trap type (BL_PH, PH against BL), covariates
+#    fixed: Intercept, zone (Transitional, Northern against Southern),
+#           trap type (BL_PH, PH against BL), covariates
 #    fourier / spatiotemporal: the same plus c1, s1 (, c2, s2)
 # =============================================================================
 harm <- c(rbind(paste0("c", 1:H), paste0("s", 1:H)))
 design <- function(terms) {
   X <- model.matrix(as.formula(paste("~", paste(terms, collapse = " + "))), d)
-  colnames(X) <- sub("^trap_type", "", sub("^\\(Intercept\\)$", "Intercept", colnames(X)))
+  colnames(X) <- sub("^zone", "zone_", sub("^trap_type", "",
+                     sub("^\\(Intercept\\)$", "Intercept", colnames(X))))
   X
 }
-X_list <- list(fixed = design(c("trap_type", covs)))
-X_list$fourier <- X_list$spatiotemporal <- design(c(harm, "trap_type", covs))
+X_list <- list(fixed = design(c("zone", "trap_type", covs)))
+X_list$fourier <- X_list$spatiotemporal <- design(c("zone", harm, "trap_type", covs))
 beta_prior_sd <- function(X)       # intercept N(0, 10^2), harmonics N(0, 2.5^2), others N(0, 1)
   ifelse(colnames(X) == "Intercept", 10, ifelse(grepl("^[cs][0-9]$", colnames(X)), 2.5, 1))
 
@@ -147,8 +151,8 @@ inits_for <- function(model) {
     i <- base
     if (model != "fixed") i <- c(i, list(u_z = rep(0, T), sigma_year = 0.3))
     if (model == "spatiotemporal") i <- c(i, list(
-      z_g = rep(0, S), z_a = rep(0, S), z_b = rep(0, S), v_z = rep(0, S),
-      sigma_g = 0.5, sigma_a = 0.3, sigma_b = 0.3, sigma_v = 0.4,
+      z_g = rep(0, S), z_a = rep(0, S), z_b = rep(0, S),
+      sigma_g = 0.5, sigma_a = 0.3, sigma_b = 0.3,
       range_km = runif(1, 100, 300), phi = 0.5))
     i
   }
@@ -157,7 +161,7 @@ inits_for <- function(model) {
 hyper_for <- function(model) switch(model,
   fixed          = "sigma",
   fourier        = c("sigma_year", "sigma"),
-  spatiotemporal = c("range_km", "sigma_g", "sigma_a", "sigma_b", "sigma_v", "sigma_year",
+  spatiotemporal = c("range_km", "sigma_g", "sigma_a", "sigma_b", "sigma_year",
                      "phi", "sigma", "sigma_innov"))
 
 # =============================================================================
@@ -223,7 +227,7 @@ plot_peak_hist <- function(pk_list, file) {
     facet_wrap(~ model, ncol = 1) +
     scale_fill_brewer(palette = "Dark2") + scale_colour_brewer(palette = "Dark2") +
     labs(x = "Peak week", y = "Density", fill = NULL, colour = NULL,
-         subtitle = "Posterior peak-week draws, all site-years, by zone (zones assigned after fitting)") +
+         subtitle = "Posterior peak-week draws, all site-years, by zone") +
     theme_bw(base_size = 9) + theme(legend.position = "bottom")
   ggsave(file, p, width = 7, height = 2 + 2.5 * length(pk_list), dpi = 300)
 }

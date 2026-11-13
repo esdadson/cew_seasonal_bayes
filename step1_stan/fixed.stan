@@ -4,7 +4,8 @@
 //
 //   y_n ~ N(x_n' beta, sigma^2)
 //
-//   x_n   intercept, trap type, weekly EVI and GDD, six crop shares
+//   x_n   intercept, zone intercept (Transitional, Northern against Southern),
+//         trap type, weekly EVI and GDD, six crop shares
 //
 // No seasonal curve: a peak week can only come from the covariates.
 // =============================================================================

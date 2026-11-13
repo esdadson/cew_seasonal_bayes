@@ -14,9 +14,9 @@ cew_seasonal_bayes/
 ├── step1/step1_data.R          Step 1 modelling data from covariates/ (weekly log(CEW + 1),
 │                               weeks 1-52 of every monitored site-year)
 ├── step1_stan/                 Step 1: three nested Stan models, 2020 held out
-│   ├── fixed.stan                intercept, trap type, EVI, GDD, crop shares
+│   ├── fixed.stan                intercept, zone intercept, trap type, EVI, GDD, crop shares
 │   ├── fourier.stan              + shared harmonic seasonal curve (<= 2 harmonics) + year intercept
-│   ├── spatiotemporal.stan       + site intercept (spatial Matern + independent), spatial site
+│   ├── spatiotemporal.stan       + spatial site intercept (Matern), spatial site
 │   │                             slopes on cos1 / sin1 (raw sites), AR(1) residual in site-year
 │   ├── stan_common.R             data, design matrices, priors, scoring and plots
 │   └── step1_stan.R              modes dryrun / fit / summary -> results/step1_stan/

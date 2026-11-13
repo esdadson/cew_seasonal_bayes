@@ -3,10 +3,10 @@
 # Fits and compares three nested Stan models of weekly log(CEW + 1)
 # (definitions in stan_common.R and in each .stan file):
 #
-#   fixed           fixed.stan           intercept, trap type, covariates
+#   fixed           fixed.stan           intercept, zone intercept, trap type, covariates
 #   fourier         fourier.stan         + shared harmonic seasonal curve (<= 2 harmonics)
 #                                        + year random intercept
-#   spatiotemporal  spatiotemporal.stan  + site intercept (spatial Matern + independent)
+#   spatiotemporal  spatiotemporal.stan  + spatial site intercept (Matern)
 #                                        + spatial site slopes on cos1 / sin1
 #                                        + AR(1) residual within site-year
 #
@@ -55,7 +55,7 @@ message(sprintf("Sampler: %d chains x %d iterations (%d warmup), thin %d -> %d p
 model_dir <- function(m) { p <- file.path(out_root, m); dir.create(file.path(p, "stan_csv"), recursive = TRUE, showWarnings = FALSE); p }
 compile   <- function(m) cmdstanr::cmdstan_model(file.path("step1_stan", paste0(m, ".stan")))
 saved_vars <- function(m) c(hyper_for(m), "beta", if (m != "fixed") "u",
-                            if (m == "spatiotemporal") c("g", "v", "a", "b"), "peak", "eta_test")
+                            if (m == "spatiotemporal") c("g", "a", "b"), "peak", "eta_test")
 
 # =============================================================================
 # 1. Dry run: time per gradient and projected run time ----------------------------------
@@ -172,7 +172,7 @@ if (mode == "summary") {
   zs <- bind_rows(lapply(done, function(m) cbind(model = m, zone_peak_stats(col(m, "peak")))))
   message("\nModel comparison (elpd_diff: against the best LOO model; held-out ", yr_test,
           " scored with the marginal predictive):"); print(cmp, digits = 4)
-  message("\nPeak weeks by zone (zones assigned after fitting), delays behind Southern:"); print(zs)
+  message("\nPeak weeks by zone, delays behind Southern:"); print(zs)
   write.csv(cmp, file.path(out_root, "comparison.csv"), row.names = FALSE)
   write.csv(zs, file.path(out_root, "zone_stats.csv"), row.names = FALSE)
 
@@ -183,8 +183,8 @@ if (mode == "summary") {
     file.path(out_root, "season_curve.png"))
   if ("spatiotemporal" %in% done) {
     m <- "spatiotemporal"
-    plot_site_map(colMeans(col(m, "g")) + colMeans(col(m, "v")), file.path(out_root, "map_site_intercept.png"),
-                  "Spatiotemporal: site intercept g + v (posterior mean)")
+    plot_site_map(colMeans(col(m, "g")), file.path(out_root, "map_site_intercept.png"),
+                  "Spatiotemporal: spatial site intercept g, departure from the zone level (posterior mean)")
     sp <- colMeans(site_peaks(col(m, "peak")))
     plot_site_map(sp, file.path(out_root, "map_site_peak.png"),
                   "Spatiotemporal: mean peak week of each site (posterior mean over its site-years)", mid = median(sp))

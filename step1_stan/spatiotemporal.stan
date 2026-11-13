@@ -2,13 +2,13 @@
 // step1_stan/spatiotemporal.stan
 // Fourier spatial regression of y = log(CEW + 1) with an AR(1) residual:
 //
-//   y_n = x_n' beta + u_t + g_i + v_i + a_i cos1(w) + b_i sin1(w) + e_n
+//   y_n = x_n' beta + u_t + g_i + a_i cos1(w) + b_i sin1(w) + e_n
 //
-//   x_n' beta   intercept, shared seasonal curve (H <= 2 harmonics), trap type,
+//   x_n' beta   intercept, zone intercept (Transitional, Northern against Southern),
+//               shared seasonal curve (H <= 2 harmonics), trap type,
 //               weekly EVI and GDD, six crop shares
 //   u_t         year random intercept, N(0, sigma_year^2)
 //   g_i         spatial site intercept:   g ~ MVN(0, sigma_g^2 C)
-//   v_i         independent site intercept, N(0, sigma_v^2)
 //   a_i, b_i    spatial site slopes on cos1 = cos(2 pi w/52), sin1 = sin(2 pi w/52):
 //               a ~ MVN(0, sigma_a^2 C), b ~ MVN(0, sigma_b^2 C). They shift and
 //               reshape each site's seasonal curve, so peak timing varies in space.
@@ -18,7 +18,9 @@
 //               for g, a and b (one Cholesky factor per gradient)
 //
 // All site effects are non-centered (g = sigma_g * L * z_g). C gets a 1e-6
-// jitter: sites metres apart share g, a, b and still differ by v.
+// jitter: sites metres apart share g, a, b (they differ only in covariates and
+// the residual). The zone intercept sets each zone's mean level; g is the
+// smooth departure from it.
 // =============================================================================
 data {
   int<lower=1> N;
@@ -73,11 +75,9 @@ parameters {
   vector[S] z_g;                           // spatial effects before scaling: g = sigma_g * L * z_g
   vector[S] z_a;
   vector[S] z_b;
-  vector[S] v_z;                           // v / sigma_v
   real<lower=0> sigma_g;
   real<lower=0> sigma_a;
   real<lower=0> sigma_b;
-  real<lower=0> sigma_v;
   real<lower=0> range_km;                  // Matern 3/2 range (km); length-scale = range / 2
   real<lower=-1, upper=1> phi;             // AR(1) correlation between consecutive weeks
   real<lower=0> sigma;                     // marginal residual sd
@@ -90,8 +90,7 @@ model {
   vector[S] g = sigma_g * (L * z_g);
   vector[S] a = sigma_a * (L * z_a);
   vector[S] b = sigma_b * (L * z_b);
-  vector[S] v = sigma_v * v_z;
-  vector[N] mu = X * beta + u[year] + g[site] + v[site]
+  vector[N] mu = X * beta + u[year] + g[site]
                  + a[site] .* cos1[week] + b[site] .* sin1[week];
 
   // exact AR(1) likelihood with gaps: e_n | e_prev ~ N(phi^gap e_prev, sigma^2 (1 - phi^(2 gap)))
@@ -105,12 +104,10 @@ model {
   z_g ~ std_normal();
   z_a ~ std_normal();
   z_b ~ std_normal();
-  v_z ~ std_normal();
   sigma_year ~ exponential(lambda_sd);
   sigma_g ~ exponential(lambda_sd);
   sigma_a ~ exponential(lambda_sd);
   sigma_b ~ exponential(lambda_sd);
-  sigma_v ~ exponential(lambda_sd);
   range_km ~ inv_gamma(1, lambda_range);
   sigma ~ student_t(3, 0, sigma_scale);    // phi: uniform on (-1, 1)
 }
@@ -118,7 +115,6 @@ generated quantities {
   vector[S] g;
   vector[S] a;
   vector[S] b;
-  vector[S] v = sigma_v * v_z;
   real sigma_innov = sigma * sqrt(1 - square(phi));   // sd of the week-to-week innovation
   vector[N] log_lik;                       // conditional on the previous week (AR(1))
   array[N_sy] int peak;                    // peak week of every site-year (mean, no residual)
@@ -129,7 +125,7 @@ generated quantities {
     a = sigma_a * (L * z_a);
     b = sigma_b * (L * z_b);
 
-    vector[N] e = y - (X * beta + u[year] + g[site] + v[site]
+    vector[N] e = y - (X * beta + u[year] + g[site]
                        + a[site] .* cos1[week] + b[site] .* sin1[week]);
     for (n in idx_first) log_lik[n] = normal_lpdf(e[n] | 0, sigma);
     for (j in 1:N_next) {
@@ -137,7 +133,7 @@ generated quantities {
       log_lik[idx_next[j]] = normal_lpdf(e[idx_next[j]] | pg * e[idx_prev[j]], sigma * sqrt(1 - square(pg)));
     }
 
-    vector[N_all] eta = X_all * beta + u[year_all] + g[site_all] + v[site_all]
+    vector[N_all] eta = X_all * beta + u[year_all] + g[site_all]
                         + a[site_all] .* cos1[week_all] + b[site_all] .* sin1[week_all];
     for (j in 1:N_sy) {
       int r0 = (j - 1) * 52;

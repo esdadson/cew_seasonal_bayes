@@ -242,13 +242,13 @@ Step 1 lives in `step1/step1_data.R` (data) and `step1_stan/` (models); step 2 i
 
 | File | What it does |
 | --- | --- |
-| `step1_stan/fixed.stan` | Fixed-effects regression: intercept, trap type, weekly EVI and GDD, six crop shares. |
+| `step1_stan/fixed.stan` | Fixed-effects regression: intercept, zone intercept (Transitional and Northern against Southern; it shifts the level, not the timing), trap type, weekly EVI and GDD, six crop shares. |
 | `step1_stan/fourier.stan` | `fixed` + a seasonal curve shared by all sites (harmonics of week, at most 2: `STAN_HARM`) + a year random intercept. |
-| `step1_stan/spatiotemporal.stan` | `fourier` + a site intercept (spatial Matern 3/2 on the raw site locations + an independent part) + spatially correlated site slopes on cos/sin of week (each site's peak shifts) + an AR(1) residual over weeks within each site-year. |
+| `step1_stan/spatiotemporal.stan` | `fourier` + a spatial site intercept (Matern 3/2 on the raw site locations) + spatially correlated site slopes on cos/sin of week (each site's peak shifts) + an AR(1) residual over weeks within each site-year. |
 | `step1_stan/stan_common.R` | Data, design matrices, priors, held-out scoring, peak weeks, plots. |
 | `step1_stan/step1_stan.R` | Driver with three modes: `dryrun`, `fit`, `summary`. |
 
-Every model is fit to **2008–2019**. **2020 is held out** and predicted out of sample (`STEP1_HOLDOUT`). Zones are not in any model; they are used only to summarise the predicted peak weeks.
+Every model is fit to **2008–2019**. **2020 is held out** and predicted out of sample (`STEP1_HOLDOUT`). Zone enters every model as a fixed intercept only; the seasonal curve is shared, so timing differences come from the spatial site slopes and the covariates. Zones also summarise the predicted peak weeks.
 
 Sampling defaults: 4 chains × 15 000 iterations (7 500 warmup), thin = 30, so 4 × 7 500 / 30 = **1000 posterior draws**; `adapt_delta = 0.9`, `max_treedepth = 10`. Change them with `STAN_ITER`, `STAN_WARMUP`, `STAN_THIN`, `STAN_ADAPT_DELTA`, `STAN_MAX_TREEDEPTH`. Thinning makes the saved draws smaller, but every iteration still has to run.
 
@@ -258,7 +258,7 @@ Sampling defaults: 4 chains × 15 000 iterations (7 500 warmup), thin = 30, so 4
    STAN_MODE=dryrun sbatch --cpus-per-task=1 --time=0-04:00:00 hpc/step1_stan.sbatch
    tail -40 logs/step1_stan.<jobid>.out
    ```
-   Laptop timing (Nov 2026, full data, 422 sites, 15 000 iterations per chain): fixed ~5 min, fourier ~20 min, spatiotemporal ~18 h (17 ms per gradient, ~255 leapfrog steps, no divergences; 73 h if every iteration hit max tree depth). Hazel cores may be slower, so check the dry run there before setting `--time`.
+   Laptop timing (Nov 2026, full data, 422 sites, 15 000 iterations per chain, before zone was added and v dropped): fixed ~5 min, fourier ~20 min, spatiotemporal ~18 h (17 ms per gradient, ~255 leapfrog steps, no divergences; 73 h if every iteration hit max tree depth). Hazel cores may be slower, so check the dry run there before setting `--time`.
 
 2. **Fit.** All three models in one job (fixed and fourier first, minutes; then spatiotemporal), 4 chains in parallel. Request about 1.5 × the projected time; above 4 days add `--qos=long`.
    ```bash

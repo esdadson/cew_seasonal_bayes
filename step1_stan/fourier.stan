@@ -4,7 +4,8 @@
 //
 //   y_n ~ N(x_n' beta + u_t, sigma^2)
 //
-//   x_n' beta  intercept, shared seasonal curve
+//   x_n' beta  intercept, zone intercept (Transitional, Northern against Southern),
+//              shared seasonal curve
 //              sum_h [c_h cos(2 pi h w/52) + s_h sin(2 pi h w/52)], h = 1..H (H <= 2),
 //              trap type, weekly EVI and GDD, six crop shares
 //   u_t        year random intercept, u_t ~ N(0, sigma_year^2); the held-out
