@@ -14,3 +14,8 @@ archive/**/*.rds
 archive/**/*.log
 # Stray graphics device output
 Rplots.pdf
+# Compiled Stan models (cmdstanr writes them next to the .stan files)
+step1_stan/*.exe
+step1_stan/fixed
+step1_stan/fourier
+step1_stan/spatiotemporal

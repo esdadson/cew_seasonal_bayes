@@ -148,9 +148,9 @@ dat6_brms <- dat6 %>% ungroup() %>%
 formula_gp <- bf(
   log_CEW ~
     EVI_filled + gdd + 
-    corn + cotton + soybeans + tobacco + peanuts + other + 
-    (0 + s1 + c1 + s2 + c2 || zone_fac) + 
-    gp(lon_scaled, lat_scaled, k = 20, c = 1.25) + 
+    corn + cotton + soybeans + tobacco + peanuts + other + zone_fac + 
+    s1 + c1 + s2 + c2 + zone_fac:(s1 + c1 + s2 + c2) + 
+    gp(longitude, latitude, cov = "exponential", gr = TRUE, iso = TRUE, scale = TRUE) + 
     (1 | year) + 
     (1 | trap_type),
   family = gaussian()
@@ -161,10 +161,10 @@ priors_gp <- c(
   prior(normal(0, 1), class = "b"),
   prior(student_t(3, 0, 2.5), class = "sd"),
   prior(exponential(1), class = "sdgp"),
-  prior(inv_gamma(5, 5), class = "lscale", coef = "gplon_scaledlat_scaled")
+  prior(gamma(2, 4), class = "lscale", coef = "gplongitudelatitude")
 )
 
-fit_gp2.1 <- brm(
+fit_gp2.2 <- brm(
   formula = formula_gp,
   data = dat6_brms,
   prior = priors_gp,
@@ -173,19 +173,20 @@ fit_gp2.1 <- brm(
   thin = 4,
   warmup = 14000,
   backend = "cmdstanr", 
-  control = list(adapt_delta = 0.99, 
-                 max_treedepth = 12),
+  control = list(adapt_delta = 0.98, 
+                 max_treedepth = 10),
   cores = 4,
+  threads = 4,
   seed = 42,
   save_pars = save_pars(all = TRUE),
-  file = "C:/Users/edadson/Desktop/CEW/brms_fit/fit_gp2.1.rds"
+  file = "C:/Users/edadson/Desktop/CEW/brms_fit/fit_gp2.2.rds"
 )
 
-summary(fit_gp2.1)
+summary(fit_gp2.2)
 
 # fitted values
-preds = posterior_predict(fit_gp2.1, 
-                          newdata = dat6_brms,
+preds = posterior_predict(fit_gp2.3, 
+                          newdata = d_fit,
                           allow_new_levels = TRUE)
 fitted = colMeans(preds)
 fitted_lower = apply(preds, 2, quantile, 0.025)
